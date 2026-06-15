@@ -35,6 +35,18 @@ async function deriveSafetyCode(aIdentityKey: string, bIdentityKey: string): Pro
   return code.replace(/(\d{4})(?=\d)/g, '$1 '); // 16 位分 4 组显示
 }
 
+// 默认 STUN：国内可达（Cloudflare + 小米 + B站），替换在中国被墙的 Google STUN。
+// IPv6 候选由浏览器在有 IPv6 时自动收集，无需额外配置。
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.miwifi.com:3478' },
+  { urls: 'stun:stun.chat.bilibili.com:3478' }
+];
+// TURN 临时凭据签发端点（Cloudflare Worker / 自建后端）。留空则不启用动态 TURN；
+// 运行时可用 localStorage 'vc.turnEndpoint' 覆盖，或用 'vc.turn' 直接配静态 TURN（自建 coturn）。
+// 强制中继可用 localStorage 'vc.relayOnly' = '1'（隐藏双方真实 IP，代价是流量绕 TURN）。
+const DEFAULT_TURN_ENDPOINT = '';
+
 interface SimpleP2PChatProps {
   onClose?: () => void;
   userIdentity?: {
@@ -82,24 +94,48 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
   // 避免 sendIdentity 与对端 hello 到达之间的竞态。
   const bundleInitRef = useRef<Promise<{ bundle: any; signature: string }> | null>(null);
 
-  // WebRTC配置：STUN + 可选 TURN（通过 localStorage 注入：vc.turn = {urls,username,credential}）
-  const rtcConfiguration: RTCConfiguration = (() => {
-    const servers: RTCIceServer[] = [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' }
-    ];
-    try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('vc.turn') : null;
-      if (raw) {
-        const turn = JSON.parse(raw) as RTCIceServer;
-        if (turn && turn.urls) servers.push(turn);
+  // WebRTC ICE 服务器：默认国内 STUN；TURN 可选（静态 vc.turn，或经端点动态签发临时凭据）。
+  // 仅 STUN 即可覆盖公网/锥形NAT/双 IPv6 的用户；对称 NAT/大内网用户需 TURN 中继。
+  const iceServersRef = useRef<RTCIceServer[]>([...DEFAULT_ICE_SERVERS]);
+  const relayOnlyRef = useRef<boolean>(false);
+
+  // 启动时加载 TURN 配置（静态 + 动态签发）；失败不影响仅 STUN 的连接
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const servers: RTCIceServer[] = [...DEFAULT_ICE_SERVERS];
+      try {
+        if (typeof localStorage !== 'undefined') {
+          relayOnlyRef.current = localStorage.getItem('vc.relayOnly') === '1';
+          const raw = localStorage.getItem('vc.turn');
+          if (raw) {
+            const turn = JSON.parse(raw) as RTCIceServer;
+            if (turn && turn.urls) servers.push(turn);
+          }
+        }
+      } catch {
+        // 忽略坏配置
       }
-    } catch {
-      // 忽略坏配置
-    }
-    return { iceServers: servers };
-  })();
+      const endpoint = (typeof localStorage !== 'undefined' && localStorage.getItem('vc.turnEndpoint')) || DEFAULT_TURN_ENDPOINT;
+      if (endpoint) {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 4000);
+          const resp = await fetch(endpoint, { signal: ctrl.signal });
+          clearTimeout(timer);
+          if (resp.ok) {
+            const data = await resp.json();
+            const ice = data.iceServers ?? data;
+            (Array.isArray(ice) ? ice : [ice]).forEach((s: any) => { if (s && s.urls) servers.push(s); });
+          }
+        } catch {
+          // 动态签发失败则仅用 STUN（外加已有的静态 TURN）
+        }
+      }
+      if (!cancelled) iceServersRef.current = servers;
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // 等待 ICE 收集完成（带超时，避免轮询死循环）
   const waitForIceGathering = (target: RTCPeerConnection, timeoutMs = 5000) =>
@@ -308,7 +344,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
   // 创建PeerConnection
   const createPeerConnection = useCallback(() => {
     try {
-      const newPc = new RTCPeerConnection(rtcConfiguration);
+      const newPc = new RTCPeerConnection({
+        iceServers: iceServersRef.current,
+        iceTransportPolicy: relayOnlyRef.current ? 'relay' : 'all'
+      });
       log('PeerConnection创建成功');
 
       newPc.onicecandidate = (event) => {

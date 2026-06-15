@@ -173,7 +173,9 @@ class VeilConnectApp {
           responseHeaders: {
             ...details.responseHeaders,
             'Content-Security-Policy': [
-              "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'"
+              // connect-src 放行 https: 以便向 TURN 凭据签发端点(如 Cloudflare Worker)拉取临时凭据；
+              // script-src 仍严格限制为 'self'（抗 XSS 的关键）。WebRTC 的 STUN/TURN(UDP) 不受 CSP 约束。
+              "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https:"
             ]
           }
         });
