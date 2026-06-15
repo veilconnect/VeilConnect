@@ -1,0 +1,20 @@
+# 依赖
+node_modules/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 构建产物
+dist/
+release/
+coverage/
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db
+
+# 本地环境
+.env
+.env.local

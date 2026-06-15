@@ -1,0 +1,17 @@
+{
+  "name": "veilconnect-signaling-server",
+  "version": "1.0.0",
+  "description": "VeilConnect WebRTC signaling server",
+  "main": "signaling-server.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node signaling-server.js",
+    "syntax": "node --check signaling-server.js",
+    "test": "jest --roots ./ --testMatch \"**/*.test.js\""
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.0",
+    "ws": "^8.16.0"
+  }
+}
