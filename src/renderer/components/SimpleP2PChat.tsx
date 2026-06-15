@@ -532,12 +532,14 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     }
   }, [log]);
 
-  // 组件卸载时清理
+  // 组件卸载时清理：仅在真正卸载时断开。
+  // 注意：依赖必须为空 []，否则 disconnect 随 pc/dc 变化而重建，会在建连过程中
+  // （setPc/setDc 触发重渲染）误触发 cleanup 把刚建立的连接/数据通道关掉。改用 ref 取最新 disconnect。
   useEffect(() => {
     return () => {
-      disconnect();
+      disconnectRef.current?.();
     };
-  }, [disconnect]);
+  }, []);
 
   // 获取状态颜色
   const getStatusColor = () => {
