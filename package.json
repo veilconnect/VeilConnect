@@ -1,6 +1,6 @@
 {
   "name": "veilconnect",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "VeilConnect - 可自部署的网页端到端加密聊天（P2P / WebRTC / Double Ratchet）",
   "license": "MIT",
   "author": "VeilConnect Team",
