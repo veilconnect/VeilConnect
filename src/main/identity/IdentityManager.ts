@@ -312,8 +312,11 @@ export class IdentityManager {
       throw new Error('Invalid user identity: ID does not match public key');
     }
 
+    // 只有同时带 box 公钥与绑定签名、且验签通过，才算「加密公钥已验证」。
+    // 缺失任一字段属于无加密绑定的 v1 旧身份：仍可保存，但绝不能标记为 verified。
+    const hasBinding = !!(data.boxPublicKey && data.keyBindingSignature);
     if (data.boxPublicKey || data.keyBindingSignature) {
-      const ok = this.verifyKeyBinding({
+      const ok = hasBinding && this.verifyKeyBinding({
         publicKey: data.publicKey,
         boxPublicKey: data.boxPublicKey,
         keyBindingSignature: data.keyBindingSignature
@@ -328,7 +331,7 @@ export class IdentityManager {
       keyBindingSignature: data.keyBindingSignature,
       nickname: data.nickname || '未知用户',
       avatar: data.avatar,
-      verified: true,
+      verified: hasBinding,
       addedAt: Date.now()
     };
 

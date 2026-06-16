@@ -1,5 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from '../i18n/useTranslation';
+import { SignalingClient, generateRoomCredentials } from '../../web/signaling/SignalingClient';
+
+/** 从链接或裸 hash 解析房间参数：支持完整 URL（含 #room=..&t=..）或纯 'room=..&t=..'。 */
+function parseRoomLink(input: string): { roomId: string; token: string } | null {
+  try {
+    const hash = input.includes('#') ? input.slice(input.indexOf('#') + 1) : input;
+    const params = new URLSearchParams(hash);
+    const roomId = params.get('room');
+    const token = params.get('t');
+    if (roomId && token) return { roomId, token };
+  } catch { /* ignore */ }
+  return null;
+}
 
 interface Message {
   id: string;
@@ -19,33 +32,72 @@ interface SelfIdentity {
 type SecureStatus = 'idle' | 'pending' | 'secure' | 'failed';
 
 /**
- * 由双方的 X25519 box 公钥派生一个 6 位安全码（SAS）。
- * 两端比对结果一致即可排除「粘贴渠道被中间人中继并替换密钥」的攻击。
- * 对密钥排序后再哈希，保证双方算出同一个值。
+ * 安全码（safety number / SAS）：基于双方「长期 Ed25519 身份公钥」派生，
+ * 因此跨会话稳定、可带外（电话/当面）核对；对密钥排序后再哈希，保证双方算出同一个值。
+ * 两端比对一致即可排除「粘贴邀请码的渠道被中间人中继并替换密钥」的全程 MITM。
+ *
+ * 取 SHA-256 前 10 字节并对 10^20 取模 → 20 位十进制。10^20 ≈ 2^66.4，是此处瓶颈，
+ * 故有效熵约 66 bit（而非旧版 16 位 / 实际 ~53 bit）：主动攻击者要伪造同码，需研磨出
+ * 一对身份公钥使其组合哈希落在同一 20 位值上，约 2^66 量级。
  */
-// 安全码（safety number）：基于双方「长期 Ed25519 身份公钥」派生，因此跨会话稳定、可带外核对。
-// 取 SHA-256 前 8 字节（64 位熵），主动攻击者需 ~2^64 算力研磨碰撞身份，远高于旧版 ~20 位。
 async function deriveSafetyCode(aIdentityKey: string, bIdentityKey: string): Promise<string> {
   const [x, y] = [aIdentityKey, bIdentityKey].sort();
   const data = new TextEncoder().encode(`veilconnect-safety|${x}|${y}`);
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
   let num = 0n;
-  for (let i = 0; i < 8; i++) num = (num << 8n) | BigInt(digest[i]);
-  const code = (num % 10_000_000_000_000_000n).toString().padStart(16, '0');
-  return code.replace(/(\d{4})(?=\d)/g, '$1 '); // 16 位分 4 组显示
+  for (let i = 0; i < 10; i++) num = (num << 8n) | BigInt(digest[i]);
+  const code = (num % 100_000_000_000_000_000_000n).toString().padStart(20, '0'); // 10^20 ≈ 2^66
+  return code.replace(/(\d{4})(?=\d)/g, '$1 '); // 20 位分 5 组显示
 }
 
-// 默认 STUN：国内可达（Cloudflare + 小米 + B站），替换在中国被墙的 Google STUN。
+// STUN 选择策略：默认只用 Cloudflare；仅当探测到 Cloudflare 不可达时，才回退到小米 + B站。
+// （三者都替换了在中国被墙的 Google STUN。）注意：RTCPeerConnection 的 iceServers 数组是
+// 并行查询、没有原生「失败才用下一个」的串行回退；要实现「不可用才回退」必须先主动探测可达性。
 // IPv6 候选由浏览器在有 IPv6 时自动收集，无需额外配置。
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.cloudflare.com:3478' },
+const PRIMARY_STUN: RTCIceServer = { urls: 'stun:stun.cloudflare.com:3478' };
+const FALLBACK_STUN: RTCIceServer[] = [
   { urls: 'stun:stun.miwifi.com:3478' },
   { urls: 'stun:stun.chat.bilibili.com:3478' }
 ];
-// TURN 临时凭据签发端点（Cloudflare Worker / 自建后端）。留空则不启用动态 TURN；
-// 运行时可用 localStorage 'vc.turnEndpoint' 覆盖，或用 'vc.turn' 直接配静态 TURN（自建 coturn）。
-// 强制中继可用 localStorage 'vc.relayOnly' = '1'（隐藏双方真实 IP，代价是流量绕 TURN）。
-const DEFAULT_TURN_ENDPOINT = '';
+// 探测前的安全默认：先把全部列上（保证即使用户在探测完成前就建连也有可用 STUN），
+// 探测完成后再按结果收敛为「仅 Cloudflare」或「仅小米+B站」。
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [PRIMARY_STUN, ...FALLBACK_STUN];
+
+/**
+ * 探测某个 STUN 是否可达：用仅含该 STUN 的临时 PeerConnection 收集候选，
+ * 在超时内拿到 server-reflexive(srflx) 候选即视为可达（说明 STUN 成功返回了公网映射）。
+ * 探测用的 PC 立即关闭，不参与真正的会话。
+ */
+async function probeStun(server: RTCIceServer, timeoutMs = 1500): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let pc: RTCPeerConnection | null = null;
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      try { pc?.close(); } catch { /* ignore */ }
+      resolve(ok);
+    };
+    try {
+      pc = new RTCPeerConnection({ iceServers: [server] });
+      pc.createDataChannel('probe');
+      pc.onicecandidate = (e) => {
+        if (e.candidate && e.candidate.type === 'srflx') finish(true);
+      };
+      pc.createOffer().then((o) => pc!.setLocalDescription(o)).catch(() => finish(false));
+      setTimeout(() => finish(false), timeoutMs);
+    } catch {
+      finish(false);
+    }
+  });
+}
+// TURN 临时凭据签发端点（推荐 Cloudflare Worker，见 infra/cloudflare-turn-worker.js；或自建后端）。
+// 自部署：信令服务器内置 GET /turn-credentials（基于 coturn use-auth-secret 签发时限凭据），
+// 故默认端点即同源的 '/turn-credentials'，开箱即用；可用 localStorage 'vc.turnEndpoint' 覆盖，
+// 'vc.turn' 可直接配静态 TURN。
+// 注意：relayOnly 现在【默认开启】（隐藏双方真实 IP）——因此必须有可用 TURN 连接才能建立。
+//      若要放弃此保护以换连通性（如本地双标签页联调），显式设 localStorage 'vc.relayOnly' = '0'。
+const DEFAULT_TURN_ENDPOINT = '/turn-credentials';
 
 interface SimpleP2PChatProps {
   onClose?: () => void;
@@ -68,19 +120,19 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
   // 聊天状态
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageInput, setMessageInput] = useState('');
-  const [offerCode, setOfferCode] = useState('');
-  const [answerCode, setAnswerCode] = useState('');
-  const [inputCode, setInputCode] = useState('');
-  
-  // 对话框状态
-  const [showOfferDialog, setShowOfferDialog] = useState(false);
-  const [showAnswerDialog, setShowAnswerDialog] = useState(false);
+
+  // 信令房间状态
+  const [roomLink, setRoomLink] = useState('');     // host 建房后生成的分享链接
+  const [inputCode, setInputCode] = useState('');   // guest 手动粘贴的房间链接
+  const [showRoomDialog, setShowRoomDialog] = useState(false);
   const [showJoinDialog, setShowJoinDialog] = useState(false);
 
   // 端到端加密 / 身份验证状态
   const [secureStatus, setSecureStatus] = useState<SecureStatus>('idle');
   const [peerInfo, setPeerInfo] = useState<{ userId: string; nickname: string } | null>(null);
   const [safetyCode, setSafetyCode] = useState('');
+  // 用户是否已带外核对安全码（SAS）。在确认前只能声称「已加密」，不能声称「已验证/抗 MITM」。
+  const [sasConfirmed, setSasConfirmed] = useState(false);
 
   // Refs
   const heartbeatInterval = useRef<number | null>(null);
@@ -90,23 +142,54 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
   const disconnectRef = useRef<(() => void) | null>(null);
   // Double Ratchet：对端地址（用对端 userId 作为会话地址）
   const peerIdRef = useRef<string | null>(null);
+  // 信令 / WebRTC：当前 PeerConnection、信令客户端、早到的 ICE 候选缓冲、ICE 配置就绪信号
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const signalingRef = useRef<SignalingClient | null>(null);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const iceReadyRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+  if (!iceReadyRef.current) {
+    let resolve!: () => void;
+    const promise = new Promise<void>(r => (resolve = r));
+    iceReadyRef.current = { promise, resolve };
+  }
   // 本地 ratchet prekey bundle + 其身份签名记忆化为单个 promise，
   // 避免 sendIdentity 与对端 hello 到达之间的竞态。
   const bundleInitRef = useRef<Promise<{ bundle: any; signature: string }> | null>(null);
 
-  // WebRTC ICE 服务器：默认国内 STUN；TURN 可选（静态 vc.turn，或经端点动态签发临时凭据）。
-  // 仅 STUN 即可覆盖公网/锥形NAT/双 IPv6 的用户；对称 NAT/大内网用户需 TURN 中继。
+  // WebRTC ICE 服务器与中继策略。为「尽量安全、不被中国相关方截获元数据」：
+  // - relayOnly 默认开启：只用 TURN 的 relay 候选，隐藏双方真实 IP，邀请码(SDP)里也不出现真实 IP；
+  // - STUN 仅在关闭 relayOnly 时才用，优先 Cloudflare（境外），探测不可达才回退小米/B站（中国节点，仅最后兜底）。
   const iceServersRef = useRef<RTCIceServer[]>([...DEFAULT_ICE_SERVERS]);
-  const relayOnlyRef = useRef<boolean>(false);
+  const relayOnlyRef = useRef<boolean>(true);
+  // relayOnly 开启却无可用 TURN 时的告警，建连时surface给用户（避免静默无法连接 / 静默泄露 IP）
+  const iceWarningRef = useRef<string | null>(null);
 
-  // 启动时加载 TURN 配置（静态 + 动态签发）；失败不影响仅 STUN 的连接
+  // 启动时确定 ICE 配置：① relayOnly 默认开（可用 vc.relayOnly='0' 关）；② 非 relay 才探测/选 STUN；
+  // ③ 叠加 TURN（静态 vc.turn / 动态 vc.turnEndpoint，推荐 Cloudflare Worker）；④ 守卫并告警。
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const servers: RTCIceServer[] = [...DEFAULT_ICE_SERVERS];
+      // relayOnly 默认开启（尽量安全）；显式设 vc.relayOnly='0' 才关闭（以暴露真实 IP 换连通性）
+      let relayOnly = true;
       try {
         if (typeof localStorage !== 'undefined') {
-          relayOnlyRef.current = localStorage.getItem('vc.relayOnly') === '1';
+          relayOnly = localStorage.getItem('vc.relayOnly') !== '0';
+        }
+      } catch { /* 忽略 */ }
+      relayOnlyRef.current = relayOnly;
+
+      // STUN 仅在非 relay 模式下需要（relay 模式只收集 TURN 的 relay 候选，根本不接触 STUN）。
+      let servers: RTCIceServer[] = [];
+      if (!relayOnly) {
+        const cloudflareOk = await probeStun(PRIMARY_STUN);
+        servers = cloudflareOk ? [PRIMARY_STUN] : [...FALLBACK_STUN];
+        // 早于 log() 声明（TDZ），用 console 记录；不向聊天窗注入系统消息
+        console.log(`[ICE] ${cloudflareOk ? 'STUN: 使用 Cloudflare' : 'STUN: Cloudflare 不可达，回退到小米 + B站（中国节点）'}`);
+      }
+
+      // 静态 TURN（自建 coturn）：vc.turn = {"urls":"turn:host:3478","username":"u","credential":"p"}
+      try {
+        if (typeof localStorage !== 'undefined') {
           const raw = localStorage.getItem('vc.turn');
           if (raw) {
             const turn = JSON.parse(raw) as RTCIceServer;
@@ -116,6 +199,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
       } catch {
         // 忽略坏配置
       }
+
+      // 动态 TURN：从签发端点（推荐 Cloudflare Worker，见 infra/cloudflare-turn-worker.js）现签临时凭据
       const endpoint = (typeof localStorage !== 'undefined' && localStorage.getItem('vc.turnEndpoint')) || DEFAULT_TURN_ENDPOINT;
       if (endpoint) {
         try {
@@ -129,31 +214,27 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
             (Array.isArray(ice) ? ice : [ice]).forEach((s: any) => { if (s && s.urls) servers.push(s); });
           }
         } catch {
-          // 动态签发失败则仅用 STUN（外加已有的静态 TURN）
+          // 动态签发失败：不静默降级（降级 = 泄露真实 IP），交由下面的守卫告警
         }
       }
+
+      // 安全守卫：relayOnly 开启却没有任何 TURN → 无法建连。为「尽量安全」不自动降级，
+      // 仅记录告警，建连时再 surface 给用户（提示部署 Cloudflare TURN 或临时关 relayOnly）。
+      const hasTurn = servers.some(s => {
+        const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+        return urls.some(u => typeof u === 'string' && u.startsWith('turn'));
+      });
+      iceWarningRef.current = (relayOnly && !hasTurn)
+        ? '已开启强制中继(relayOnly)但未配置可用 TURN：连接无法建立。请部署 infra/cloudflare-turn-worker.js 并设 localStorage.vc.turnEndpoint，或临时设 vc.relayOnly=0（注意：会暴露双方真实 IP）。'
+        : null;
+      if (iceWarningRef.current) console.warn('[ICE]', iceWarningRef.current);
+
       if (!cancelled) iceServersRef.current = servers;
+      // 通知建连流程：ICE 配置已就绪（避免自动加入早于配置完成而用到默认/空 TURN）
+      iceReadyRef.current?.resolve();
     })();
     return () => { cancelled = true; };
   }, []);
-
-  // 等待 ICE 收集完成（带超时，避免轮询死循环）
-  const waitForIceGathering = (target: RTCPeerConnection, timeoutMs = 5000) =>
-    new Promise<void>((resolve) => {
-      if (target.iceGatheringState === 'complete') return resolve();
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        target.removeEventListener('icegatheringstatechange', onChange);
-        resolve();
-      };
-      const onChange = () => {
-        if (target.iceGatheringState === 'complete') finish();
-      };
-      target.addEventListener('icegatheringstatechange', onChange);
-      setTimeout(finish, timeoutMs);
-    });
 
   // 日志和消息处理
   const log = useCallback((msg: string, type: 'INFO' | 'ERROR' | 'WARN' = 'INFO') => {
@@ -344,11 +425,13 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
   // 创建PeerConnection
   const createPeerConnection = useCallback(() => {
     try {
+      // relayOnly 但无 TURN 时给出可见告警，避免「点了建连却永远连不上」一脸懵
+      if (iceWarningRef.current) log(iceWarningRef.current, 'WARN');
       const newPc = new RTCPeerConnection({
         iceServers: iceServersRef.current,
         iceTransportPolicy: relayOnlyRef.current ? 'relay' : 'all'
       });
-      log('PeerConnection创建成功');
+      log(relayOnlyRef.current ? 'PeerConnection 创建成功（强制中继 relayOnly，隐藏真实 IP）' : 'PeerConnection 创建成功');
 
       newPc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -385,6 +468,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
       log('数据通道已打开，开始安全握手…');
       setConnectionStatus('connected');
       setSecureStatus('pending');
+      setSasConfirmed(false);
       void sendIdentity(channel);
     };
 
@@ -423,81 +507,135 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     setDc(channel);
   }, [log, sendIdentity, handleHello, handleCipher]);
 
-  // 创建连接
-  const createConnection = useCallback(async () => {
-    const newPc = createPeerConnection();
-    if (!newPc) return;
-
-    setRole('host');
-    setConnectionStatus('connecting');
-
-    // 创建数据通道
-    const channel = newPc.createDataChannel('chat', { ordered: true });
-    setupDataChannel(channel);
-
-    try {
-      const offer = await newPc.createOffer();
-      await newPc.setLocalDescription(offer);
-
-      await waitForIceGathering(newPc);
-
-      const fullOffer = JSON.stringify(newPc.localDescription);
-      setOfferCode(fullOffer);
-      setShowOfferDialog(true);
-      log('邀请码已生成');
-    } catch (error) {
-      log(`创建连接失败: ${error}`, 'ERROR');
+  // 早到的 ICE 候选可能先于 remoteDescription 抵达：先缓冲，设好远端描述后再补加。
+  const addOrBufferCandidate = useCallback(async (target: RTCPeerConnection, cand: RTCIceCandidateInit) => {
+    if (target.remoteDescription && target.remoteDescription.type) {
+      try { await target.addIceCandidate(cand); } catch { /* 忽略无效候选 */ }
+    } else {
+      pendingCandidatesRef.current.push(cand);
     }
-  }, [createPeerConnection, setupDataChannel, log]);
+  }, []);
 
-  // 处理应答
-  const handleAnswer = useCallback(async () => {
-    if (!pc || !inputCode.trim()) return;
-
-    try {
-      const answer = JSON.parse(inputCode.trim());
-      await pc.setRemoteDescription(answer);
-      setShowOfferDialog(false);
-      setInputCode('');
-      log('应答已处理，等待连接建立');
-    } catch (error) {
-      log(`处理应答失败: ${error}`, 'ERROR');
+  const flushCandidates = useCallback(async (target: RTCPeerConnection) => {
+    const list = pendingCandidatesRef.current;
+    pendingCandidatesRef.current = [];
+    for (const c of list) {
+      try { await target.addIceCandidate(c); } catch { /* 忽略 */ }
     }
-  }, [pc, inputCode, log]);
+  }, []);
 
-  // 加入连接
-  const joinConnection = useCallback(async () => {
-    if (!inputCode.trim()) return;
+  /**
+   * 经信令房间建立 P2P 连接。host 在对端入房后发 offer，guest 收到 offer 后回 answer，
+   * 双方 trickle ICE。DataChannel 打开后，既有的 hello/cipher/SAS 握手原样接管（与传输方式无关）。
+   */
+  const beginSession = useCallback(async (asHost: boolean, roomId: string, token: string) => {
+    // 等待 ICE 配置（relayOnly / TURN）就绪，避免用到默认/空配置
+    await iceReadyRef.current?.promise;
 
     const newPc = createPeerConnection();
     if (!newPc) return;
-
-    setRole('guest');
+    pcRef.current = newPc;
+    pendingCandidatesRef.current = [];
+    setRole(asHost ? 'host' : 'guest');
     setConnectionStatus('connecting');
 
-    newPc.ondatachannel = (event) => {
-      setupDataChannel(event.channel);
+    // trickle：本地 ICE 候选随收随经信令转发给对端
+    newPc.onicecandidate = (event) => {
+      if (event.candidate) {
+        signalingRef.current?.sendSignal({ kind: 'candidate', candidate: event.candidate.toJSON() });
+      }
     };
 
-    try {
-      const offer = JSON.parse(inputCode.trim());
-      await newPc.setRemoteDescription(offer);
-
-      const answer = await newPc.createAnswer();
-      await newPc.setLocalDescription(answer);
-
-      await waitForIceGathering(newPc);
-
-      const fullAnswer = JSON.stringify(newPc.localDescription);
-      setAnswerCode(fullAnswer);
-      setShowAnswerDialog(true);
-      setShowJoinDialog(false);
-      setInputCode('');
-      log('应答码已生成');
-    } catch (error) {
-      log(`加入连接失败: ${error}`, 'ERROR');
+    if (asHost) {
+      const channel = newPc.createDataChannel('chat', { ordered: true });
+      setupDataChannel(channel);
+    } else {
+      newPc.ondatachannel = (event) => setupDataChannel(event.channel);
     }
-  }, [inputCode, createPeerConnection, setupDataChannel, log]);
+
+    const signaling = new SignalingClient({
+      onPeerJoined: async () => {
+        if (!asHost) return; // 仅 host 主动发起 offer
+        try {
+          const offer = await newPc.createOffer();
+          await newPc.setLocalDescription(offer);
+          signalingRef.current?.sendSignal({ kind: 'offer', sdp: newPc.localDescription });
+          log('对方已入房，已发送 offer');
+        } catch (err) {
+          log(`创建 offer 失败: ${err instanceof Error ? err.message : err}`, 'ERROR');
+        }
+      },
+      onSignal: async (data) => {
+        try {
+          if (data?.kind === 'offer' && !asHost) {
+            await newPc.setRemoteDescription(data.sdp);
+            await flushCandidates(newPc);
+            const answer = await newPc.createAnswer();
+            await newPc.setLocalDescription(answer);
+            signalingRef.current?.sendSignal({ kind: 'answer', sdp: newPc.localDescription });
+            log('已收到 offer，回复 answer');
+          } else if (data?.kind === 'answer' && asHost) {
+            await newPc.setRemoteDescription(data.sdp);
+            await flushCandidates(newPc);
+            log('已收到对端 answer');
+          } else if (data?.kind === 'candidate' && data.candidate) {
+            await addOrBufferCandidate(newPc, data.candidate);
+          }
+        } catch (err) {
+          log(`处理信令失败: ${err instanceof Error ? err.message : err}`, 'ERROR');
+        }
+      },
+      onPeerLeft: () => log('对方已离开房间', 'WARN'),
+      onError: (e) => log(`信令: ${e}`, 'ERROR'),
+      onClose: () => log('信令连接已关闭')
+    });
+    signalingRef.current = signaling;
+
+    try {
+      if (iceWarningRef.current) log(iceWarningRef.current, 'WARN');
+      await signaling.connect();
+      signaling.join(roomId, token);
+      log(`已加入房间 ${roomId}，等待对方…`);
+    } catch (err) {
+      log(`信令连接失败: ${err instanceof Error ? err.message : err}`, 'ERROR');
+      setConnectionStatus('disconnected');
+    }
+  }, [createPeerConnection, setupDataChannel, addOrBufferCandidate, flushCandidates, log]);
+
+  // host：创建房间并生成分享链接
+  const createRoom = useCallback(async () => {
+    const { roomId, token } = generateRoomCredentials();
+    const base = `${location.origin}${location.pathname}`;
+    setRoomLink(`${base}#room=${roomId}&t=${token}`);
+    setShowRoomDialog(true);
+    await beginSession(true, roomId, token);
+  }, [beginSession]);
+
+  // guest：用房间参数加入
+  const joinRoom = useCallback(async (roomId: string, token: string) => {
+    setShowJoinDialog(false);
+    setInputCode('');
+    await beginSession(false, roomId, token);
+  }, [beginSession]);
+
+  // guest：手动粘贴房间链接加入
+  const joinByPastedLink = useCallback(async () => {
+    const parsed = parseRoomLink(inputCode.trim());
+    if (!parsed) {
+      log('房间链接无效，应形如 https://…/#room=xxx&t=yyy', 'ERROR');
+      return;
+    }
+    await joinRoom(parsed.roomId, parsed.token);
+  }, [inputCode, joinRoom, log]);
+
+  // 打开页面时若 URL 带房间参数（分享链接），自动加入；随后清掉 hash 里的 token 避免泄漏到历史
+  useEffect(() => {
+    const parsed = parseRoomLink(location.hash);
+    if (!parsed) return;
+    try { history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ }
+    void joinRoom(parsed.roomId, parsed.token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 发送消息（端到端加密）
   const sendMessage = useCallback(async () => {
@@ -505,6 +643,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     const peerId = peerIdRef.current;
     if (secureStatus !== 'secure' || !peerId) {
       log('安全通道尚未建立，无法发送消息', 'WARN');
+      return;
+    }
+    // 强制带外核对：在用户确认安全码一致前不允许发送，避免在未排除中间人的情况下泄露明文
+    if (!sasConfirmed) {
+      log('请先与对方通过电话/当面核对安全码并确认一致，再发送消息', 'WARN');
       return;
     }
 
@@ -519,10 +662,18 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     } catch (error) {
       log(`发送消息失败: ${error}`, 'ERROR');
     }
-  }, [messageInput, dc, secureStatus, addMessage, log]);
+  }, [messageInput, dc, secureStatus, sasConfirmed, addMessage, log]);
 
   // 断开连接
   const disconnect = useCallback(() => {
+    if (signalingRef.current) {
+      signalingRef.current.close();
+      signalingRef.current = null;
+    }
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
     if (pc) {
       pc.close();
       setPc(null);
@@ -531,10 +682,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
       dc.close();
       setDc(null);
     }
+    pendingCandidatesRef.current = [];
     setRole(null);
     setConnectionStatus('disconnected');
-    setOfferCode('');
-    setAnswerCode('');
+    setRoomLink('');
     // 销毁棘轮会话状态
     if (peerIdRef.current) {
       void (window as any).electronAPI?.ratchet?.close?.(peerIdRef.current);
@@ -545,6 +696,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     setSecureStatus('idle');
     setPeerInfo(null);
     setSafetyCode('');
+    setSasConfirmed(false);
     stopHeartbeat();
     log('连接已断开');
   }, [pc, dc, stopHeartbeat, log]);
@@ -783,9 +935,14 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
       <div style={styles.statusBar}>
         <div style={styles.statusLight}></div>
         <span>{getStatusText()}</span>
-        {secureStatus === 'secure' && (
-          <span style={{ ...styles.secureBadge, background: '#27ae60' }} title="消息已端到端加密，且对方身份已通过密钥绑定签名验证">
+        {secureStatus === 'secure' && sasConfirmed && (
+          <span style={{ ...styles.secureBadge, background: '#27ae60' }} title="消息已端到端加密，且你已带外核对安全码、确认无中间人">
             🔒 已加密 · 已验证
+          </span>
+        )}
+        {secureStatus === 'secure' && !sasConfirmed && (
+          <span style={{ ...styles.secureBadge, background: '#f39c12' }} title="消息已端到端加密，但尚未带外核对安全码，无法排除中间人">
+            🔒 已加密 · 待核对安全码
           </span>
         )}
         {secureStatus === 'pending' && (
@@ -810,19 +967,41 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
               对方: {peerInfo.nickname} ({peerInfo.userId.slice(0, 12)}…)
             </span>
           )}
-          <span style={{ color: '#999' }}>请与对方带外核对此码一致</span>
+          {sasConfirmed ? (
+            <span style={{ color: '#27ae60', fontWeight: 600 }}>✓ 已核对一致</span>
+          ) : (
+            <>
+              <span style={{ color: '#999' }}>请与对方通过电话/当面核对此码一致：</span>
+              <button
+                style={{ ...styles.btn, padding: '4px 12px', fontSize: 12 }}
+                onClick={() => { setSasConfirmed(true); log('已确认安全码一致，通道标记为已验证'); }}
+              >
+                一致，确认
+              </button>
+              <button
+                style={{ ...styles.btnDanger, padding: '4px 12px', fontSize: 12 }}
+                onClick={() => { log('安全码不一致，疑似中间人，已断开', 'ERROR'); disconnect(); }}
+              >
+                不一致，断开
+              </button>
+            </>
+          )}
         </div>
       )}
 
       {/* 控制面板 */}
       <div style={styles.controlsPanel}>
-        <button style={styles.btn} onClick={createConnection}>
-          🔗 {t.chat.createConnection}
+        <button style={styles.btn} onClick={createRoom} disabled={connectionStatus !== 'disconnected'}>
+          🔗 创建房间
         </button>
-        <button style={styles.btnSecondary} onClick={() => setShowJoinDialog(true)}>
-          🔌 {t.chat.joinConnection}
+        <button
+          style={styles.btnSecondary}
+          onClick={() => setShowJoinDialog(true)}
+          disabled={connectionStatus !== 'disconnected'}
+        >
+          🔌 加入房间
         </button>
-        {connectionStatus === 'connected' && (
+        {connectionStatus !== 'disconnected' && (
           <button style={styles.btnDanger} onClick={disconnect}>
             ❌ {t.chat.disconnect}
           </button>
@@ -858,84 +1037,65 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
           value={messageInput}
           onChange={(e) => setMessageInput(e.target.value)}
           onKeyPress={(e) => { if (e.key === 'Enter') void sendMessage(); }}
-          placeholder={secureStatus === 'secure' ? t.chat.typePlaceholder : '等待安全通道建立…'}
-          disabled={connectionStatus !== 'connected' || secureStatus !== 'secure'}
+          placeholder={
+            secureStatus !== 'secure'
+              ? '等待安全通道建立…'
+              : !sasConfirmed
+                ? '请先核对安全码并点「一致，确认」…'
+                : t.chat.typePlaceholder
+          }
+          disabled={connectionStatus !== 'connected' || secureStatus !== 'secure' || !sasConfirmed}
         />
         <button
           style={styles.btn}
           onClick={() => void sendMessage()}
-          disabled={connectionStatus !== 'connected' || secureStatus !== 'secure'}
+          disabled={connectionStatus !== 'connected' || secureStatus !== 'secure' || !sasConfirmed}
         >
           {(t.chat as any).send ?? '发送'}
         </button>
       </div>
 
-      {/* 邀请码对话框 */}
-      {showOfferDialog && (
+      {/* 房间链接对话框（host）：把链接发给对方，对方打开即自动加入 */}
+      {showRoomDialog && (
         <div style={styles.modal}>
           <div style={styles.modalContent}>
-            <h3>🔗 邀请码已生成</h3>
-            <p>请将以下邀请码发送给对方：</p>
-            <textarea style={styles.textarea} value={offerCode} readOnly />
-            <p>对方发送应答码后，请粘贴到下方：</p>
-            <textarea 
-              style={styles.textarea} 
-              value={inputCode}
-              onChange={(e) => setInputCode(e.target.value)}
-              placeholder="粘贴应答码..."
-            />
+            <h3>🔗 房间已创建</h3>
+            <p>把下面的链接发给对方，对方在浏览器打开即可自动加入并建立加密连接：</p>
+            <textarea style={styles.textarea} value={roomLink} readOnly />
+            <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '8px 10px', borderRadius: 6 }}>
+              ⚠️ 链接中含一次性房间口令，请通过可信渠道发送。连接建立后，<strong>务必与对方通过电话/当面核对安全码</strong>，
+              一致后再开始聊天——这是排除中间人（含信令服务器作恶）的关键一步。
+            </p>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button style={styles.btnSecondary} onClick={() => setShowOfferDialog(false)}>
+              <button style={styles.btnSecondary} onClick={() => setShowRoomDialog(false)}>
                 关闭
               </button>
-              <button style={styles.btn} onClick={() => copyToClipboard(offerCode)}>
-                📋 复制邀请码
-              </button>
-              <button style={styles.btn} onClick={handleAnswer}>
-                确认应答
+              <button style={styles.btn} onClick={() => copyToClipboard(roomLink)}>
+                📋 复制链接
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 应答码对话框 */}
-      {showAnswerDialog && (
-        <div style={styles.modal}>
-          <div style={styles.modalContent}>
-            <h3>🔌 应答码已生成</h3>
-            <p>请将以下应答码发送给对方：</p>
-            <textarea style={styles.textarea} value={answerCode} readOnly />
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button style={styles.btnSecondary} onClick={() => setShowAnswerDialog(false)}>
-                关闭
-              </button>
-              <button style={styles.btn} onClick={() => copyToClipboard(answerCode)}>
-                📋 复制应答码
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 加入连接对话框 */}
+      {/* 加入房间对话框（guest）：手动粘贴房间链接（通常直接打开链接即可，无需这一步） */}
       {showJoinDialog && (
         <div style={styles.modal}>
           <div style={styles.modalContent}>
-            <h3>🔌 加入连接</h3>
-            <p>请粘贴对方的邀请码：</p>
-            <textarea 
-              style={styles.textarea} 
+            <h3>🔌 加入房间</h3>
+            <p>粘贴对方发来的房间链接：</p>
+            <textarea
+              style={styles.textarea}
               value={inputCode}
               onChange={(e) => setInputCode(e.target.value)}
-              placeholder="粘贴邀请码..."
+              placeholder="https://…/#room=xxx&t=yyy"
             />
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button style={styles.btnSecondary} onClick={() => setShowJoinDialog(false)}>
+              <button style={styles.btnSecondary} onClick={() => { setShowJoinDialog(false); setInputCode(''); }}>
                 取消
               </button>
-              <button style={styles.btn} onClick={joinConnection}>
-                加入连接
+              <button style={styles.btn} onClick={joinByPastedLink}>
+                加入
               </button>
             </div>
           </div>

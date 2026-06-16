@@ -1,0 +1,60 @@
+# VeilConnect 自部署一键栈：网页+信令(app) · TURN中继(coturn) · 自动HTTPS(caddy)
+#
+# 用法：
+#   1. cp .env.example .env  并填好 DOMAIN / TURN_SECRET / EXTERNAL_IP
+#   2. docker compose up -d --build
+#   3. 浏览器访问 https://<DOMAIN>
+#
+# 端口：80/443(caddy, HTTP+HTTPS) · 3478(coturn, UDP/TCP) · 49160-49200(coturn relay, UDP)
+# WebRTC/WebCrypto 需安全上下文(HTTPS)，故 caddy 负责为 DOMAIN 自动签发 Let's Encrypt 证书。
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      # 网页与信令同源：Origin 即 https://<DOMAIN>，必须在白名单内
+      ALLOWED_ORIGINS: "https://${DOMAIN}"
+      # /turn-credentials 用这些签发 coturn 时限凭据（须与 coturn 的 static-auth-secret/realm 一致）
+      TURN_SECRET: "${TURN_SECRET}"
+      TURN_HOST: "${DOMAIN}"
+      TURN_PORT: "3478"
+      TURN_TTL: "3600"
+    expose:
+      - "3001"
+
+  coturn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host    # coturn 处理 relay 需直接访问主机网络/端口
+    command: >
+      -n --no-cli --no-tls --no-dtls
+      --listening-port=3478
+      --realm=${DOMAIN}
+      --server-name=${DOMAIN}
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET}
+      --min-port=49160 --max-port=49200
+      --external-ip=${EXTERNAL_IP}
+      --no-multicast-peers
+      --no-loopback-peers
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,87 +1,22 @@
 {
   "name": "veilconnect",
   "version": "1.0.0",
-  "description": "VeilConnect - P2P 端到端加密聊天桌面客户端",
-  "main": "dist/main.js",
+  "description": "VeilConnect - 可自部署的网页端到端加密聊天（P2P / WebRTC / Double Ratchet）",
   "license": "MIT",
   "author": "VeilConnect Team",
   "scripts": {
-    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build:main": "webpack --config webpack.main.config.js --mode production",
-    "build:renderer": "webpack --config webpack.renderer.config.js --mode production",
-    "build": "npm run clean && npm run build:main && npm run build:renderer",
-    "dev:main": "webpack --config webpack.main.config.js --mode development --watch",
-    "dev:renderer": "webpack serve --config webpack.renderer.config.js --mode development",
-    "dev": "concurrently -k -n main,renderer,electron \"npm:dev:main\" \"npm:dev:renderer\" \"wait-on http://localhost:8080 dist/main.js && cross-env NODE_ENV=development electron .\"",
-    "start": "electron .",
+    "build:web": "webpack --config webpack.web.config.js --mode production",
+    "build": "npm run build:web",
+    "dev:web": "webpack serve --config webpack.web.config.js --mode development",
+    "serve": "node server/signaling-server.js",
+    "start": "npm run build:web && npm run serve",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux"
-  },
-  "build": {
-    "appId": "com.veilconnect.app",
-    "productName": "VeilConnect",
-    "copyright": "Copyright © 2025 VeilConnect Team",
-    "directories": {
-      "output": "release",
-      "buildResources": "build"
-    },
-    "files": [
-      "dist/**/*",
-      "package.json",
-      "!**/*.map"
-    ],
-    "extraMetadata": {
-      "main": "dist/main.js"
-    },
-    "asar": true,
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "artifactName": "${productName}-Setup-${version}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "category": "public.app-category.social-networking",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "category": "Network",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
-    }
+    "test:harness": "webpack --config infra/harness/webpack.harness.js",
+    "test:browser": "webpack --config infra/harness/webpack.browser.js && node infra/harness/p2p-browser-harness.mjs",
+    "test:all": "bash scripts/test-all.sh"
   },
   "dependencies": {
     "@emotion/react": "^11.11.0",
@@ -96,8 +31,6 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-i18next": "^13.5.0",
-    "simple-peer": "^9.11.1",
-    "socket.io-client": "^4.7.0",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1"
   },
@@ -106,19 +39,19 @@
     "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
-    "concurrently": "^8.0.0",
-    "cross-env": "^7.0.3",
+    "buffer": "^6.0.3",
+    "crypto-browserify": "^3.12.1",
     "css-loader": "^6.8.0",
-    "electron": "^27.3.11",
-    "electron-builder": "^24.0.0",
     "html-webpack-plugin": "^5.5.0",
     "jest": "^29.7.0",
-    "rimraf": "^5.0.0",
+    "node-datachannel": "^0.32.3",
+    "process": "^0.11.10",
+    "puppeteer": "^25.1.0",
+    "stream-browserify": "^3.0.0",
     "style-loader": "^3.3.0",
     "ts-jest": "^29.1.0",
     "ts-loader": "^9.4.0",
     "typescript": "^5.0.0",
-    "wait-on": "^7.2.0",
     "webpack": "^5.88.0",
     "webpack-cli": "^5.1.0",
     "webpack-dev-server": "^4.15.0"

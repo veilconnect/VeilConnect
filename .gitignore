@@ -7,6 +7,8 @@ __pycache__/
 
 # 构建产物
 dist/
+dist-harness/
+server/public/
 release/
 coverage/
 

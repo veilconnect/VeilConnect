@@ -1,0 +1,5 @@
+# Caddy 反向代理 + 自动 HTTPS。WebSocket（信令）由 Caddy 自动透传，无需额外配置。
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3001
+}

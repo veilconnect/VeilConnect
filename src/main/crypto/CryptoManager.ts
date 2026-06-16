@@ -146,24 +146,11 @@ export class CryptoManager {
     return JSON.parse(messageString);
   }
 
-  /**
-   * @deprecated 这里的 keyPair 是 X25519 box 密钥（32B），但 nacl.sign 需要 Ed25519 64B 私钥，
-   * 调用必抛 "bad secret key size"。签名能力请用 IdentityManager 的 Ed25519 keypair。
-   * 留此方法仅为兼容老调用，未来版本将移除。
-   */
-  public signMessage(message: string): string {
-    if (!this.keyPair) {
-      throw new Error('Key pair not initialized');
-    }
-
-    const messageBytes = naclUtil.decodeUTF8(message);
-    const signature = nacl.sign.detached(messageBytes, this.keyPair.secretKey);
-    
-    return naclUtil.encodeBase64(signature);
-  }
+  // 注：原 signMessage 已移除——它用 X25519 box 私钥（32B）调 nacl.sign（需 Ed25519 64B），
+  // 必抛 "bad secret key size"，属死代码。签名一律走 IdentityManager 的 Ed25519 keypair。
 
   /**
-   * 验证数字签名
+   * 验证数字签名（Ed25519 公钥验签，纯静态运算，不依赖本机 box 私钥）
    */
   public verifySignature(message: string, signature: string, publicKey: string): boolean {
     const messageBytes = naclUtil.decodeUTF8(message);

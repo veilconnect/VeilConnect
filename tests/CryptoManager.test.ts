@@ -67,16 +67,17 @@ describe('CryptoManager', () => {
   });
 
   describe('数字签名', () => {
-    it('signMessage + verifySignature 自洽', () => {
-      // 注意：CryptoManager 用 nacl.box keypair（X25519），不能直接 nacl.sign。
-      // 实际上 signMessage 使用 nacl.sign.detached，需要 sign keypair。
-      // 这里只验证错误密钥不通过（边界）— round-trip 在 IdentityManager 已覆盖。
-      const sig = (() => {
-        try { return alice.signMessage('hello'); } catch (e) { return null; }
-      })();
-      // 如果 box keypair 不能用于 sign，会抛错；这是预期行为。
-      // tweetnacl 的 sign 需要 64-byte secret，box 是 32-byte，会抛 "bad secret key size"。
-      expect(sig).toBeNull();
+    it('verifySignature 用 Ed25519 公钥校验：正确签名通过、错误签名拒绝', () => {
+      // CryptoManager 持有的是 X25519 box keypair，不能用于签名；签名一律由 Ed25519 身份完成。
+      // 这里用独立的 nacl.sign keypair 验证 verifySignature 的纯静态验签逻辑。
+      const signer = nacl.sign.keyPair();
+      const msg = 'hello';
+      const sig = naclUtil.encodeBase64(
+        nacl.sign.detached(naclUtil.decodeUTF8(msg), signer.secretKey)
+      );
+      const pub = naclUtil.encodeBase64(signer.publicKey);
+      expect(alice.verifySignature(msg, sig, pub)).toBe(true);
+      expect(alice.verifySignature('tampered', sig, pub)).toBe(false);
     });
   });
 

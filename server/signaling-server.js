@@ -114,6 +114,18 @@ class SignalingServer {
     }
     
     setupMiddleware() {
+        // 安全响应头（网页托管）：CSP 限制脚本仅本地（抗 XSS），放行 ws/wss 信令与 https TURN 拉取。
+        // worker-src 'self' blob: 以兼容打包出的加密 Web Worker。WebRTC(UDP) 不受 CSP 约束。
+        this.app.use((req, res, next) => {
+            res.setHeader('Content-Security-Policy',
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+                "img-src 'self' data:; font-src 'self' data:; connect-src 'self' https: wss: ws:; " +
+                "worker-src 'self' blob:; base-uri 'self'; form-action 'self'");
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Referrer-Policy', 'no-referrer');
+            next();
+        });
+
         // 前置 origin 校验：未通过直接 403，避免 cors 抛错走默认 500 错误页
         this.app.use((req, res, next) => {
             const origin = req.headers.origin;
@@ -166,7 +178,46 @@ class SignalingServer {
         this.app.get('/api/rooms', (req, res) => {
             res.json({ totalRooms: this.rooms.size, totalClients: this.clients.size });
         });
-        
+
+        // TURN 临时凭据签发：基于 coturn use-auth-secret（TURN REST API），替代外部 Cloudflare Worker。
+        // username = 过期 unix 时间戳；credential = base64(HMAC-SHA1(TURN_SECRET, username))。
+        // 需环境变量 TURN_SECRET + TURN_HOST（与 coturn 的 static-auth-secret/realm 一致）。
+        this.app.get('/turn-credentials', (req, res) => {
+            // 每 IP 限速，缓解无鉴权端点被脚本反复拉取以盗刷 TURN 中继带宽
+            const ip = (req.socket && req.socket.remoteAddress) || 'unknown';
+            if (!this.checkRateLimit(ip)) {
+                return res.status(429).json({ error: 'Too many requests' });
+            }
+            const secret = process.env.TURN_SECRET;
+            const host = process.env.TURN_HOST;
+            if (!secret || !host) {
+                // 未配置：返回 503，客户端会优雅跳过（不静默降级）
+                return res.status(503).json({ error: 'TURN not configured' });
+            }
+            const ttl = parseInt(process.env.TURN_TTL || '3600', 10);
+            const port = process.env.TURN_PORT || '3478';
+            const username = String(Math.floor(Date.now() / 1000) + ttl);
+            const credential = require('crypto').createHmac('sha1', secret).update(username).digest('base64');
+            const urls = [
+                `turn:${host}:${port}?transport=udp`,
+                `turn:${host}:${port}?transport=tcp`
+            ];
+            if (process.env.TURNS_PORT) {
+                urls.push(`turns:${host}:${process.env.TURNS_PORT}?transport=tcp`);
+            }
+            res.json({ iceServers: [{ urls, username, credential }], ttl });
+        });
+
+        // SPA 回退：非 API/健康/凭据路由一律返回 index.html（支持前端路由 / 直接打开分享链接）
+        this.app.get('*', (req, res, next) => {
+            if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/turn-credentials') {
+                return next();
+            }
+            res.sendFile(path.join(__dirname, 'public', 'index.html'), (err) => {
+                if (err) next();
+            });
+        });
+
         // 404 处理
         this.app.use((req, res) => {
             res.status(404).json({

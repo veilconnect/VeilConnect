@@ -208,6 +208,20 @@ describe('IdentityManager', () => {
       const saved = mgr.importPeerIdentity(payload);
       expect(saved.userId).toBe(peer.userId);
       expect(saved.boxPublicKey).toBeUndefined();
+      // 无加密公钥绑定的旧身份不得标记为 verified（否则上层会误信其加密通道）
+      expect(saved.verified).toBe(false);
+    });
+
+    it('只带 boxPublicKey 但缺绑定签名时拒绝导入（不可绕过验签）', () => {
+      const peer = makeForeignIdentity('HalfBound');
+      const payload = JSON.stringify({
+        userId: peer.userId,
+        publicKey: peer.publicKey,
+        boxPublicKey: peer.boxPub, // 提供了 box 公钥却不给签名
+        nickname: 'HalfBound'
+      });
+
+      expect(() => mgr.importPeerIdentity(payload)).toThrow(/binding/i);
     });
   });
 
