@@ -64,18 +64,25 @@ veilconnect/
 - Node 18+（推荐 20 LTS）、npm 9+
 - 自托管生产环境：Docker + Docker Compose、公网 IP、一个解析到本机的域名
 
-### 一键自部署（推荐）
+### 一行安装（空白服务器，无需手工下载）
 
-在有公网 IP、已把域名解析到本机的云服务器上：
+在一台干净的 Linux 服务器上，**一条命令**即可（自动装 git/Docker、克隆代码、生成配置、起栈）：
 
 ```bash
-git clone <本仓库> veilconnect && cd veilconnect
-sudo bash scripts/install.sh chat.example.com
-# 自动装 Docker、探测公网 IP、生成 TURN 密钥、写 .env、放行端口、起栈
-# 完成后访问 https://chat.example.com（Caddy 自动签发 HTTPS 证书）
+# ① 有公网域名（解析到本机、80/443 公网可达）
+curl -fsSL https://raw.githubusercontent.com/veilconnect/VeilConnect/main/scripts/bootstrap.sh | sudo bash -s -- chat.example.com
+
+# ② 有公网 IP 但没买域名（自动用 <IP>.sslip.io 签真证书）
+curl -fsSL https://raw.githubusercontent.com/veilconnect/VeilConnect/main/scripts/bootstrap.sh | sudo bash
+
+# ③ 局域网 / 无公网 / 先本机试用（自签证书，免域名免备案）
+curl -fsSL https://raw.githubusercontent.com/veilconnect/VeilConnect/main/scripts/bootstrap.sh | sudo bash -s -- --local
 ```
 
-手动等价方式：`cp .env.example .env`（填 DOMAIN/EXTERNAL_IP/TURN_SECRET）→ `docker compose up -d --build`。完整说明见 [`docs/user/SELF_HOST_GUIDE.md`](docs/user/SELF_HOST_GUIDE.md)。
+完成后按提示访问 `https://<域名或IP[:端口]>`。代码默认克隆到 `/opt/veilconnect`。
+
+> 已 clone 仓库者也可直接：`sudo bash scripts/install.sh [域名|--local]`。
+> 手动等价：`cp .env.example .env`（填好）→ `docker compose up -d --build`。完整说明见 [`docs/user/SELF_HOST_GUIDE.md`](docs/user/SELF_HOST_GUIDE.md)。
 
 ### 开发 / 本地构建
 
