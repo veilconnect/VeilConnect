@@ -81,8 +81,15 @@ curl -fsSL https://raw.githubusercontent.com/veilconnect/VeilConnect/main/script
 
 完成后按提示访问 `https://<域名或IP[:端口]>`。代码默认克隆到 `/opt/veilconnect`。
 
+**一键卸载**（停栈、删容器/卷/本地镜像；`--purge` 再删 ufw 规则与安装目录）：
+
+```bash
+sudo bash /opt/veilconnect/scripts/uninstall.sh --purge
+```
+
 > 已 clone 仓库者也可直接：`sudo bash scripts/install.sh [域名|--local]`。
 > 手动等价：`cp .env.example .env`（填好）→ `docker compose up -d --build`。完整说明见 [`docs/user/SELF_HOST_GUIDE.md`](docs/user/SELF_HOST_GUIDE.md)。
+> 卸载不影响安全：服务器端本就不存任何聊天数据，身份/密钥只在各用户浏览器本地。
 
 ### 开发 / 本地构建
 
