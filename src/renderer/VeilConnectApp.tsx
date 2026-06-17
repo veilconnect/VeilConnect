@@ -15,7 +15,6 @@ interface Identity {
 
 const VeilConnectApp: React.FC = () => {
   const [identity, setIdentity] = useState<Identity | null>(null);
-  const [view, setView] = useState<'identity' | 'chat'>('identity');
 
   useEffect(() => {
     (async () => {
@@ -25,7 +24,6 @@ const VeilConnectApp: React.FC = () => {
         const stored = await api.identity.getCurrentIdentity();
         if (stored && stored.userId) {
           setIdentity(mapStored(stored));
-          setView('chat');
         }
       } catch (err) {
         console.error('[VeilConnect] failed to load identity', err);
@@ -33,32 +31,24 @@ const VeilConnectApp: React.FC = () => {
     })();
   }, []);
 
-  const handleReady = useCallback((freshIdentity: Identity) => {
-    setIdentity(freshIdentity);
-    setView('chat');
-  }, []);
-
-  const handleSwitchIdentity = useCallback(() => {
-    setView('identity');
+  const handleReady = useCallback((freshIdentity: any) => {
+    // 规整字段：加载路径可能传入原始存储对象（userId/secretKey），统一映射为 publicId/privateKey。
+    setIdentity(mapStored(freshIdentity));
   }, []);
 
   return (
     <I18nProvider>
       <div className="veilconnect-root">
-        {view === 'chat' && identity ? (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-            <TopBar identity={identity} onSwitch={handleSwitchIdentity} />
-            <div style={{ flex: 1, minHeight: 0, background: '#f5f7fa' }}>
-              <SimpleP2PChat
-                userIdentity={{
-                  customId: identity.publicId,
-                  nickname: identity.nickname,
-                  publicKey: identity.publicKey,
-                  privateKey: identity.privateKey
-                }}
-                onClose={handleSwitchIdentity}
-              />
-            </div>
+        {identity ? (
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#f5f7fa' }}>
+            <SimpleP2PChat
+              userIdentity={{
+                customId: identity.publicId,
+                nickname: identity.nickname,
+                publicKey: identity.publicKey,
+                privateKey: identity.privateKey
+              }}
+            />
           </div>
         ) : (
           <SimpleApp onReady={handleReady} />
@@ -67,43 +57,6 @@ const VeilConnectApp: React.FC = () => {
     </I18nProvider>
   );
 };
-
-const TopBar: React.FC<{ identity: Identity; onSwitch: () => void }> = ({ identity, onSwitch }) => (
-  <div
-    style={{
-      padding: '10px 20px',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      color: 'white',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between'
-    }}
-  >
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-      <span style={{ fontSize: 22 }}>{identity.avatar || '👤'}</span>
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <span style={{ fontWeight: 600 }}>{identity.nickname}</span>
-        <span style={{ fontSize: 11, opacity: 0.85, fontFamily: 'monospace' }}>
-          {identity.publicId.slice(0, 16)}…
-        </span>
-      </div>
-    </div>
-    <button
-      onClick={onSwitch}
-      style={{
-        background: 'rgba(255,255,255,0.15)',
-        color: 'white',
-        border: '1px solid rgba(255,255,255,0.4)',
-        borderRadius: 6,
-        padding: '6px 14px',
-        cursor: 'pointer',
-        fontSize: 13
-      }}
-    >
-      身份管理
-    </button>
-  </div>
-);
 
 function mapStored(stored: any): Identity {
   return {

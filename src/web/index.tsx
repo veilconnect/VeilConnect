@@ -21,6 +21,7 @@ const UnlockGate: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [unlocked, setUnlocked] = useState(false);
+  const [showPw, setShowPw] = useState(false);
 
   useEffect(() => {
     isKeyStoreInitialized()
@@ -98,9 +99,10 @@ const UnlockGate: React.FC = () => {
         </p>
 
         <input
-          type="password"
+          type={showPw ? 'text' : 'password'}
           autoFocus
           placeholder="口令"
+          autoComplete={initialized ? 'current-password' : 'new-password'}
           value={passphrase}
           onChange={e => setPassphrase(e.target.value)}
           disabled={busy || initialized === null}
@@ -108,14 +110,19 @@ const UnlockGate: React.FC = () => {
         />
         {!initialized && initialized !== null && (
           <input
-            type="password"
+            type={showPw ? 'text' : 'password'}
             placeholder="再次输入口令"
+            autoComplete="new-password"
             value={confirm}
             onChange={e => setConfirm(e.target.value)}
             disabled={busy}
             style={inputStyle}
           />
         )}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#888', margin: '0 0 12px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={showPw} onChange={e => setShowPw(e.target.checked)} disabled={busy} />
+          显示口令
+        </label>
 
         {error && <div style={{ color: '#d32f2f', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 

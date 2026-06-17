@@ -99,8 +99,9 @@ export class SignalingClient {
     });
   }
 
-  join(roomId: string, token: string): void {
-    this.send({ type: 'join_room', roomId, token });
+  join(roomId: string, token: string, maxClients?: number): void {
+    // maxClients 仅房主（首个加入者）设置生效；服务器据此锁定房间人数上限。
+    this.send({ type: 'join_room', roomId, token, maxClients });
   }
 
   sendSignal(data: any): void {

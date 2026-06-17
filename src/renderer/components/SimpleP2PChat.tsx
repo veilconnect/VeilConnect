@@ -100,7 +100,6 @@ async function probeStun(server: RTCIceServer, timeoutMs = 1500): Promise<boolea
 const DEFAULT_TURN_ENDPOINT = '/turn-credentials';
 
 interface SimpleP2PChatProps {
-  onClose?: () => void;
   userIdentity?: {
     customId: string;
     nickname: string;
@@ -109,7 +108,7 @@ interface SimpleP2PChatProps {
   };
 }
 
-export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdentity }) => {
+export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) => {
   const { t } = useTranslation();
   // WebRTC状态
   const [pc, setPc] = useState<RTCPeerConnection | null>(null);
@@ -133,6 +132,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
   const [safetyCode, setSafetyCode] = useState('');
   // 用户是否已带外核对安全码（SAS）。在确认前只能声称「已加密」，不能声称「已验证/抗 MITM」。
   const [sasConfirmed, setSasConfirmed] = useState(false);
+
+  // UI：瞬时提示（toast）、关于面板展开、本机昵称（可改）
+  const [toasts, setToasts] = useState<{ id: number; text: string; kind: 'info' | 'warn' | 'error' }[]>([]);
+  const [showAbout, setShowAbout] = useState(false);
+  const [myName, setMyName] = useState(userIdentity?.nickname || '');
 
   // Refs
   const heartbeatInterval = useRef<number | null>(null);
@@ -225,9 +229,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
         return urls.some(u => typeof u === 'string' && u.startsWith('turn'));
       });
       iceWarningRef.current = (relayOnly && !hasTurn)
-        ? '已开启强制中继(relayOnly)但未配置可用 TURN：连接无法建立。请部署 infra/cloudflare-turn-worker.js 并设 localStorage.vc.turnEndpoint，或临时设 vc.relayOnly=0（注意：会暴露双方真实 IP）。'
+        ? '中继服务器未就绪，可能无法连接。如长时间连不上，请联系站点管理员。'
         : null;
-      if (iceWarningRef.current) console.warn('[ICE]', iceWarningRef.current);
+      if (relayOnly && !hasTurn) {
+        console.warn('[ICE] relayOnly 已开启但未配置可用 TURN：部署 coturn 或设 localStorage.vc.turnEndpoint；或临时设 vc.relayOnly=0（会暴露双方真实 IP）。');
+      }
 
       if (!cancelled) iceServersRef.current = servers;
       // 通知建连流程：ICE 配置已就绪（避免自动加入早于配置完成而用到默认/空 TURN）
@@ -236,12 +242,52 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     return () => { cancelled = true; };
   }, []);
 
-  // 日志和消息处理
+  // 瞬时提示（toast）：状态/提示不再塞进聊天记录，改为右上角浮层、自动消失
+  const pushToast = useCallback((text: string, kind: 'info' | 'warn' | 'error' = 'info') => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, text, kind }]);
+    const ttl = kind === 'error' ? 6000 : kind === 'warn' ? 5000 : 3200;
+    setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), ttl);
+  }, []);
+
+  // 日志：用户可见提示走 toast（不污染聊天记录）；同时进 console 便于排查
   const log = useCallback((msg: string, type: 'INFO' | 'ERROR' | 'WARN' = 'INFO') => {
     console.log(`[${type}] ${msg}`);
-    const icon = type === 'INFO' ? 'ℹ️' : type === 'ERROR' ? '❌' : '⚠️';
-    addMessage(`${icon} ${msg}`, 'system');
+    pushToast(msg, type === 'ERROR' ? 'error' : type === 'WARN' ? 'warn' : 'info');
+  }, [pushToast]);
+
+  // 纯技术细节：只进 console，不显示给用户（避免用 WebRTC/信令术语吓到普通用户）
+  const dev = useCallback((msg: string) => {
+    console.log(`[DEV] ${msg}`);
   }, []);
+
+  // 复位加密/验证状态（断开、对方离开、握手失败时调用，避免出现「未连接却已验证」的矛盾状态）
+  const resetSecureState = useCallback(() => {
+    if (peerIdRef.current) {
+      void (window as any).electronAPI?.ratchet?.close?.(peerIdRef.current);
+      peerIdRef.current = null;
+    }
+    bundleInitRef.current = null;
+    peerBoxKeyRef.current = null;
+    setSecureStatus('idle');
+    setPeerInfo(null);
+    setSafetyCode('');
+    setSasConfirmed(false);
+  }, []);
+
+  // 修改本机昵称（对端在握手后会看到它）
+  const renameSelf = useCallback(async () => {
+    const next = (window.prompt('设置你的昵称（对方会看到）：', myName || '') || '').trim();
+    if (!next || next === myName) return;
+    try {
+      await (window as any).electronAPI?.identity?.updateUserInfo?.({ nickname: next });
+      if (selfIdentityRef.current) selfIdentityRef.current.nickname = next;
+      setMyName(next);
+      pushToast('昵称已更新');
+    } catch {
+      pushToast('昵称更新失败', 'error');
+    }
+  }, [myName, pushToast]);
 
   const addMessage = useCallback((text: string, type: 'sent' | 'received' | 'system') => {
     const newMessage: Message = {
@@ -279,10 +325,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
           };
         }
       } catch (err) {
-        log(`加载本地身份失败: ${err}`, 'ERROR');
+        log('读取本地身份失败，请刷新页面重试。', 'ERROR');
+        dev(`加载本地身份失败: ${err}`);
       }
     })();
-  }, [log]);
+  }, [log, dev]);
 
   // 创建（并记忆化）本地 ratchet prekey bundle，并用长期 Ed25519 身份私钥签名其身份公钥
   const ensureBundle = useCallback(async () => {
@@ -302,7 +349,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
   const sendIdentity = useCallback(async (channel: RTCDataChannel) => {
     const id = selfIdentityRef.current;
     if (!id || !id.boxPublicKey || !id.keyBindingSignature) {
-      log('本地身份缺少加密公钥，无法建立安全通道', 'ERROR');
+      log('本地身份不完整，无法建立加密通道，请重置身份后重试。', 'ERROR');
+      dev('本地身份缺少 boxPublicKey/keyBindingSignature');
       setSecureStatus('failed');
       return;
     }
@@ -319,10 +367,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
         nickname: id.nickname
       }));
     } catch (err) {
-      log(`发起安全握手失败: ${err instanceof Error ? err.message : err}`, 'ERROR');
+      log('建立加密通道失败，请重试。', 'ERROR');
+      dev(`发起安全握手失败: ${err instanceof Error ? err.message : err}`);
       setSecureStatus('failed');
     }
-  }, [log, ensureBundle]);
+  }, [log, dev, ensureBundle]);
 
   // 收到对端身份包：强制验证身份绑定 + ratchet 密钥签名，任一失败即视为中间人攻击并断开
   const handleHello = useCallback(async (bundle: any, channel: RTCDataChannel) => {
@@ -360,25 +409,28 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
         const init = await api.ratchet.encrypt(peer.userId, JSON.stringify({ c: 'init' }));
         channel.send(JSON.stringify({ type: 'cipher', payload: { t: init.type, b: init.body } }));
         setSecureStatus('secure');
-        log(`已验证对方身份 (${String(peer.userId).slice(0, 12)}…)，棘轮通道已建立（发起方）`);
+        log('🔐 端到端加密通道已建立。请与对方核对下方安全码一致后再开始聊天。');
+        dev(`ratchet established as initiator, peer=${String(peer.userId).slice(0, 12)}…`);
       } else {
         setSecureStatus('pending');
-        log(`已验证对方身份 (${String(peer.userId).slice(0, 12)}…)，等待对端建立棘轮通道…`);
+        log('🔐 正在建立端到端加密通道…');
+        dev(`ratchet pending as responder, peer=${String(peer.userId).slice(0, 12)}…`);
       }
     } catch (err) {
       setSecureStatus('failed');
       peerBoxKeyRef.current = null;
       peerIdRef.current = null;
-      log(`对方身份验证失败，可能存在中间人攻击，已断开：${err instanceof Error ? err.message : err}`, 'ERROR');
+      log('⛔ 对方身份验证失败，可能存在中间人攻击，已断开连接。', 'ERROR');
+      dev(`identity verification failed: ${err instanceof Error ? err.message : err}`);
       disconnectRef.current?.();
     }
-  }, [log]);
+  }, [log, dev]);
 
   // 收到密文：经 Double Ratchet 解密（棘轮天然抗重放：每条消息密钥用后即删）
   const handleCipher = useCallback(async (payload: any) => {
     const peerId = peerIdRef.current;
     if (!peerId || !payload || typeof payload.t !== 'number') {
-      log('安全通道未建立或密文格式错误，已丢弃', 'WARN');
+      dev('安全通道未建立或密文格式错误，已丢弃');
       return;
     }
     try {
@@ -387,17 +439,18 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
       const plain = await api.ratchet.decrypt(peerId, payload.t, payload.b);
       const obj = JSON.parse(plain) as { c?: string; t?: string };
       if (obj.c === 'init') {
-        // 发起方的会话建立控制消息：入站棘轮已就绪，标记安全（不显示）
+        // 发起方的会话建立控制消息：入站棘轮已就绪，标记安全并提示接收方核对安全码
         setSecureStatus('secure');
+        log('🔐 端到端加密通道已建立。请与对方核对下方安全码一致后再开始聊天。');
         return;
       }
       if (typeof obj.t === 'string') {
         addMessage(obj.t, 'received');
       }
     } catch {
-      log('收到无法解密的消息（已丢弃）', 'ERROR');
+      dev('收到无法解密的消息（已丢弃）');
     }
-  }, [addMessage, log]);
+  }, [addMessage, log, dev]);
 
   // 心跳机制
   const startHeartbeat = useCallback(() => {
@@ -409,11 +462,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
           const ping = { type: 'ping', timestamp: Date.now() };
           dc.send(JSON.stringify(ping));
         } catch (error) {
-          log(`心跳发送失败: ${error}`, 'ERROR');
+          dev(`心跳发送失败: ${error}`);
         }
       }
     }, 10000);
-  }, [dc, log]);
+  }, [dc, dev]);
 
   const stopHeartbeat = useCallback(() => {
     if (heartbeatInterval.current) {
@@ -431,25 +484,27 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
         iceServers: iceServersRef.current,
         iceTransportPolicy: relayOnlyRef.current ? 'relay' : 'all'
       });
-      log(relayOnlyRef.current ? 'PeerConnection 创建成功（强制中继 relayOnly，隐藏真实 IP）' : 'PeerConnection 创建成功');
+      if (relayOnlyRef.current) log('🔒 将通过中继服务器加密直连对方，你的真实 IP 不会暴露给对方。');
+      dev(relayOnlyRef.current ? 'PeerConnection 创建成功（relay 模式）' : 'PeerConnection 创建成功');
 
       newPc.onicecandidate = (event) => {
         if (event.candidate) {
-          log(`收集ICE候选: ${event.candidate.type}`);
+          dev(`收集 ICE 候选: ${event.candidate.type}`);
         } else {
-          log('ICE收集完成');
+          dev('ICE 收集完成');
         }
       };
 
       newPc.onconnectionstatechange = () => {
-        log(`连接状态: ${newPc.connectionState}`);
-        
+        dev(`连接状态: ${newPc.connectionState}`);
+
         if (newPc.connectionState === 'connected') {
           setConnectionStatus('connected');
-          log('连接成功！可以开始聊天了！');
+          log('✅ 已连上对方，正在建立端到端加密…');
           startHeartbeat();
         } else if (newPc.connectionState === 'disconnected' || newPc.connectionState === 'failed') {
           setConnectionStatus('disconnected');
+          resetSecureState();
           stopHeartbeat();
         }
       };
@@ -457,15 +512,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
       setPc(newPc);
       return newPc;
     } catch (error) {
-      log(`创建PeerConnection失败: ${error}`, 'ERROR');
+      log('建立连接失败，请重试。', 'ERROR');
+      dev(`创建 PeerConnection 失败: ${error}`);
       return null;
     }
-  }, [log, startHeartbeat, stopHeartbeat]);
+  }, [log, dev, resetSecureState, startHeartbeat, stopHeartbeat]);
 
   // 设置数据通道
   const setupDataChannel = useCallback((channel: RTCDataChannel) => {
     channel.onopen = () => {
-      log('数据通道已打开，开始安全握手…');
+      dev('数据通道已打开，开始安全握手');
       setConnectionStatus('connected');
       setSecureStatus('pending');
       setSasConfirmed(false);
@@ -473,9 +529,9 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     };
 
     channel.onclose = () => {
-      log('数据通道已关闭');
+      log('与对方的连接已断开。');
       setConnectionStatus('disconnected');
-      setSecureStatus('idle');
+      resetSecureState();
     };
 
     channel.onmessage = (event) => {
@@ -500,12 +556,12 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
           break;
         default:
           // 未知/明文消息一律丢弃，杜绝降级到明文
-          log('收到未知类型的帧，已忽略', 'WARN');
+          dev('收到未知类型的帧，已忽略');
       }
     };
 
     setDc(channel);
-  }, [log, sendIdentity, handleHello, handleCipher]);
+  }, [log, resetSecureState, sendIdentity, handleHello, handleCipher]);
 
   // 早到的 ICE 候选可能先于 remoteDescription 抵达：先缓冲，设好远端描述后再补加。
   const addOrBufferCandidate = useCallback(async (target: RTCPeerConnection, cand: RTCIceCandidateInit) => {
@@ -528,7 +584,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
    * 经信令房间建立 P2P 连接。host 在对端入房后发 offer，guest 收到 offer 后回 answer，
    * 双方 trickle ICE。DataChannel 打开后，既有的 hello/cipher/SAS 握手原样接管（与传输方式无关）。
    */
-  const beginSession = useCallback(async (asHost: boolean, roomId: string, token: string) => {
+  const beginSession = useCallback(async (asHost: boolean, roomId: string, token: string, maxClients?: number) => {
     // 等待 ICE 配置（relayOnly / TURN）就绪，避免用到默认/空配置
     await iceReadyRef.current?.promise;
 
@@ -560,9 +616,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
           const offer = await newPc.createOffer();
           await newPc.setLocalDescription(offer);
           signalingRef.current?.sendSignal({ kind: 'offer', sdp: newPc.localDescription });
-          log('对方已入房，已发送 offer');
+          log('对方已加入，正在连接…');
+          dev('sent offer');
         } catch (err) {
-          log(`创建 offer 失败: ${err instanceof Error ? err.message : err}`, 'ERROR');
+          log('连接协商失败，请重试。', 'ERROR');
+          dev(`创建 offer 失败: ${err instanceof Error ? err.message : err}`);
         }
       },
       onSignal: async (data) => {
@@ -573,34 +631,38 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
             const answer = await newPc.createAnswer();
             await newPc.setLocalDescription(answer);
             signalingRef.current?.sendSignal({ kind: 'answer', sdp: newPc.localDescription });
-            log('已收到 offer，回复 answer');
+            dev('received offer, sent answer');
           } else if (data?.kind === 'answer' && asHost) {
             await newPc.setRemoteDescription(data.sdp);
             await flushCandidates(newPc);
-            log('已收到对端 answer');
+            dev('received answer');
           } else if (data?.kind === 'candidate' && data.candidate) {
             await addOrBufferCandidate(newPc, data.candidate);
           }
         } catch (err) {
-          log(`处理信令失败: ${err instanceof Error ? err.message : err}`, 'ERROR');
+          log('连接协商出错，请重试。', 'ERROR');
+          dev(`处理信令失败: ${err instanceof Error ? err.message : err}`);
         }
       },
-      onPeerLeft: () => log('对方已离开房间', 'WARN'),
-      onError: (e) => log(`信令: ${e}`, 'ERROR'),
-      onClose: () => log('信令连接已关闭')
+      onPeerLeft: () => { log('对方已离开，本次会话已结束。', 'WARN'); setConnectionStatus('disconnected'); resetSecureState(); },
+      onError: (e) => { log('连接服务异常，请稍后重试。', 'ERROR'); dev(`signaling error: ${e}`); },
+      onClose: () => dev('信令连接已关闭')
     });
     signalingRef.current = signaling;
 
     try {
       if (iceWarningRef.current) log(iceWarningRef.current, 'WARN');
       await signaling.connect();
-      signaling.join(roomId, token);
-      log(`已加入房间 ${roomId}，等待对方…`);
+      // 仅房主把人数上限发给服务器锁定；访客不传（也无法放宽房主设定）。
+      signaling.join(roomId, token, asHost ? maxClients : undefined);
+      log(asHost ? '房间已就绪，等待对方加入…' : '已进入房间，正在连接对方…');
+      dev(`joined room ${roomId}`);
     } catch (err) {
-      log(`信令连接失败: ${err instanceof Error ? err.message : err}`, 'ERROR');
+      log('无法连接到服务器，请检查网络后重试。', 'ERROR');
+      dev(`信令连接失败: ${err instanceof Error ? err.message : err}`);
       setConnectionStatus('disconnected');
     }
-  }, [createPeerConnection, setupDataChannel, addOrBufferCandidate, flushCandidates, log]);
+  }, [createPeerConnection, setupDataChannel, addOrBufferCandidate, flushCandidates, resetSecureState, log, dev]);
 
   // host：创建房间并生成分享链接
   const createRoom = useCallback(async () => {
@@ -608,7 +670,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     const base = `${location.origin}${location.pathname}`;
     setRoomLink(`${base}#room=${roomId}&t=${token}`);
     setShowRoomDialog(true);
-    await beginSession(true, roomId, token);
+    // 严格一对一：房间人数上限锁定为 2（满员后服务器拒绝其他人加入）
+    await beginSession(true, roomId, token, 2);
   }, [beginSession]);
 
   // guest：用房间参数加入
@@ -686,20 +749,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
     setRole(null);
     setConnectionStatus('disconnected');
     setRoomLink('');
-    // 销毁棘轮会话状态
-    if (peerIdRef.current) {
-      void (window as any).electronAPI?.ratchet?.close?.(peerIdRef.current);
-      peerIdRef.current = null;
-    }
-    bundleInitRef.current = null;
-    peerBoxKeyRef.current = null;
-    setSecureStatus('idle');
-    setPeerInfo(null);
-    setSafetyCode('');
-    setSasConfirmed(false);
+    setShowRoomDialog(false);
+    resetSecureState();
     stopHeartbeat();
-    log('连接已断开');
-  }, [pc, dc, stopHeartbeat, log]);
+    log('已断开连接');
+  }, [pc, dc, stopHeartbeat, resetSecureState, log]);
 
   // 让握手回调（handleHello）能在验证失败时触发断开，避免 useCallback 定义顺序问题
   useEffect(() => {
@@ -921,79 +975,115 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
 
   return (
     <div style={styles.container}>
-      {/* 头部 */}
+      {/* 瞬时提示浮层（右上角，自动消失），不污染聊天记录 */}
+      {toasts.length > 0 && (
+        <div style={{ position: 'fixed', top: 14, right: 14, zIndex: 2000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+          {toasts.map(t => (
+            <div key={t.id} style={{
+              padding: '9px 14px', borderRadius: 8, color: 'white', fontSize: 13, boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+              background: t.kind === 'error' ? '#e74c3c' : t.kind === 'warn' ? '#e67e22' : '#34495e'
+            }}>{t.text}</div>
+          ))}
+        </div>
+      )}
+
+      {/* 头部：标题 + 本机身份 + 连接/加密状态 + 关于 */}
       <div style={styles.header}>
-        <h3>💬 P2P 安全聊天</h3>
-        {onClose && (
-          <button style={styles.closeBtn} onClick={onClose}>
-            ×
-          </button>
-        )}
-      </div>
-
-      {/* 状态栏 */}
-      <div style={styles.statusBar}>
-        <div style={styles.statusLight}></div>
-        <span>{getStatusText()}</span>
-        {secureStatus === 'secure' && sasConfirmed && (
-          <span style={{ ...styles.secureBadge, background: '#27ae60' }} title="消息已端到端加密，且你已带外核对安全码、确认无中间人">
-            🔒 已加密 · 已验证
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          <h3 style={{ margin: 0 }}>💬 P2P 安全聊天</h3>
+          <span
+            style={{ fontSize: 12, opacity: 0.9, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            onClick={renameSelf}
+            title="点击修改昵称（对方会看到）"
+          >
+            我：{myName || '未命名'}{userIdentity?.customId ? ` · ${userIdentity.customId.slice(0, 8)}…` : ''} ✎
           </span>
-        )}
-        {secureStatus === 'secure' && !sasConfirmed && (
-          <span style={{ ...styles.secureBadge, background: '#f39c12' }} title="消息已端到端加密，但尚未带外核对安全码，无法排除中间人">
-            🔒 已加密 · 待核对安全码
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <span style={styles.statusLight}></span>{getStatusText()}
           </span>
-        )}
-        {secureStatus === 'pending' && (
-          <span style={{ ...styles.secureBadge, background: '#f39c12' }}>🔄 安全握手中…</span>
-        )}
-        {secureStatus === 'failed' && (
-          <span style={{ ...styles.secureBadge, background: '#e74c3c' }}>⛔ 验证失败</span>
-        )}
-        {userIdentity && (
-          <span style={{ marginLeft: '20px', fontSize: '12px', color: '#666' }}>
-            用户: {userIdentity.nickname} ({userIdentity.customId})
-          </span>
-        )}
-      </div>
-
-      {/* 安全码：请与对方通过其他可信渠道（电话/当面）核对一致，以排除中间人 */}
-      {secureStatus === 'secure' && safetyCode && (
-        <div style={styles.safetyBar}>
-          <span>🛡️ 安全码 <strong style={{ fontFamily: 'monospace', letterSpacing: 1 }}>{safetyCode}</strong></span>
-          {peerInfo && (
-            <span style={{ color: '#666' }}>
-              对方: {peerInfo.nickname} ({peerInfo.userId.slice(0, 12)}…)
+          {secureStatus === 'secure' && sasConfirmed && (
+            <span style={{ ...styles.secureBadge, background: '#27ae60' }} title="消息已端到端加密，且你已带外核对安全码、确认无中间人">
+              🔒 已加密 · 已验证
             </span>
           )}
-          {sasConfirmed ? (
-            <span style={{ color: '#27ae60', fontWeight: 600 }}>✓ 已核对一致</span>
-          ) : (
-            <>
-              <span style={{ color: '#999' }}>请与对方通过电话/当面核对此码一致：</span>
+          {secureStatus === 'secure' && !sasConfirmed && (
+            <span style={{ ...styles.secureBadge, background: '#f39c12' }} title="消息已端到端加密，但尚未带外核对安全码，无法排除中间人">
+              🔒 已加密 · 待核对安全码
+            </span>
+          )}
+          {secureStatus === 'pending' && (
+            <span style={{ ...styles.secureBadge, background: '#f39c12' }}>🔄 安全握手中…</span>
+          )}
+          {secureStatus === 'failed' && (
+            <span style={{ ...styles.secureBadge, background: '#e74c3c' }}>⛔ 验证失败</span>
+          )}
+          <span
+            style={{ ...styles.secureBadge, background: 'rgba(255,255,255,0.2)', cursor: 'pointer' }}
+            onClick={() => setShowAbout(v => !v)}
+            title="关于 / 隐私与本地数据"
+          >ⓘ 关于</span>
+        </div>
+      </div>
+
+      {/* 安全码聚焦弹窗：连接已加密但尚未核对时，强制聚焦这一步（反正未确认也不能发消息） */}
+      {secureStatus === 'secure' && safetyCode && !sasConfirmed && (
+        <div style={styles.modal}>
+          <div style={{ ...styles.modalContent, maxWidth: 440, textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 6px' }}>🛡️ 核对安全码</h3>
+            <p style={{ color: '#666', fontSize: 14, margin: '0 0 16px' }}>
+              和对方<strong>互相报一遍</strong>下面这串数字（电话/当面等可信渠道）。<br />一致才说明没有中间人——这是最关键的一步。
+            </p>
+            <div style={{
+              fontFamily: 'monospace', fontSize: 26, fontWeight: 700, letterSpacing: 2,
+              background: '#f4f7ff', border: '2px solid #667eea', borderRadius: 10, padding: '16px 12px', color: '#33375a'
+            }}>
+              {safetyCode}
+            </div>
+            {peerInfo && (
+              <p style={{ color: '#888', fontSize: 12, margin: '12px 0 18px' }}>
+                对方：{peerInfo.nickname}（{peerInfo.userId.slice(0, 12)}…）
+              </p>
+            )}
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
               <button
-                style={{ ...styles.btn, padding: '4px 12px', fontSize: 12 }}
-                onClick={() => { setSasConfirmed(true); log('已确认安全码一致，通道标记为已验证'); }}
+                style={{ ...styles.btn, padding: '10px 22px', fontSize: 15 }}
+                onClick={() => { setSasConfirmed(true); pushToast('已确认安全码一致，可以开始聊天'); }}
               >
-                一致，确认
+                ✓ 一致，开始聊天
               </button>
               <button
-                style={{ ...styles.btnDanger, padding: '4px 12px', fontSize: 12 }}
+                style={{ ...styles.btnDanger, padding: '10px 22px', fontSize: 15 }}
                 onClick={() => { log('安全码不一致，疑似中间人，已断开', 'ERROR'); disconnect(); }}
               >
-                不一致，断开
+                ✗ 不一致，断开
               </button>
-            </>
-          )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 已核对后的常驻安全码条（小字参考，绿色） */}
+      {secureStatus === 'secure' && safetyCode && sasConfirmed && (
+        <div style={styles.safetyBar}>
+          <span>🛡️ 安全码 <strong style={{ fontFamily: 'monospace', letterSpacing: 1 }}>{safetyCode}</strong></span>
+          {peerInfo && <span style={{ color: '#666' }}>对方: {peerInfo.nickname} ({peerInfo.userId.slice(0, 12)}…)</span>}
+          <span style={{ color: '#27ae60', fontWeight: 600 }}>✓ 已核对一致</span>
         </div>
       )}
 
       {/* 控制面板 */}
       <div style={styles.controlsPanel}>
-        <button style={styles.btn} onClick={createRoom} disabled={connectionStatus !== 'disconnected'}>
+        <button
+          style={styles.btn}
+          onClick={createRoom}
+          disabled={connectionStatus !== 'disconnected'}
+          title="创建一个严格一对一房间：满 2 人后，再有人拿到链接也会被服务器拒绝（Room full）。"
+        >
           🔗 创建房间
         </button>
+        <span style={{ fontSize: 12, color: '#888' }}>· 一对一（满 2 人后自动锁房）</span>
         <button
           style={styles.btnSecondary}
           onClick={() => setShowJoinDialog(true)}
@@ -1008,33 +1098,61 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
         )}
       </div>
 
-      {/* 隐私与本地数据说明 */}
-      <div style={{ padding: '6px 12px', background: '#f1f8f4', borderTop: '1px solid #e0eee5', fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <span title="消息端到端加密、点对点直传；服务器仅做配对中转，不经手也不存储任何消息">
-          🔒 服务器不保存任何聊天记录；消息端到端加密、点对点直传。聊天记录仅存于本设备浏览器（关闭页面即清，不上传）。
-        </span>
-        <button
-          style={{ padding: '3px 10px', fontSize: 12, border: '1px solid #cdd', borderRadius: 5, background: 'white', cursor: 'pointer' }}
-          onClick={() => { setMessages([]); }}
-          title="仅清空当前页面显示的消息"
-        >
-          清空对话
-        </button>
-        <button
-          style={{ padding: '3px 10px', fontSize: 12, border: '1px solid #e0b4b4', borderRadius: 5, background: 'white', color: '#c0392b', cursor: 'pointer' }}
-          onClick={async () => {
-            if (!window.confirm('清除本设备的全部本地数据？\n\n将删除本浏览器内保存的加密身份与所有本地数据，且不可恢复（服务器本就不存任何数据）。清除后回到「设置口令」从头开始。')) return;
-            try { await (window as any).electronAPI?.system?.clearLocalData?.(); } catch { /* ignore */ }
-            window.location.reload();
-          }}
-          title="删除本浏览器保存的身份与全部本地数据，回到初始状态"
-        >
-          清除本地数据
-        </button>
-      </div>
+      {/* 房间分享（host）：内联卡片，全部在同一页面内完成；连接建立后(connected)自动消失，无弹窗。 */}
+      {roomLink && showRoomDialog && connectionStatus !== 'connected' && (
+        <div style={{ padding: '12px', background: '#eef6ff', borderTop: '1px solid #cfe3fb' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <strong>🔗 房间已创建 —— 把链接发给对方，对方在浏览器打开即自动加入</strong>
+            <span style={{ fontSize: 12, color: connectionStatus === 'connecting' ? '#f39c12' : '#3498db' }}>
+              {connectionStatus === 'connecting' ? '🔄 正在建立加密连接…' : '● 等待对方加入…'}
+            </span>
+          </div>
+          <input
+            type="text"
+            style={{ width: '100%', margin: '4px 0', padding: '8px 10px', border: '1px solid #cfe3fb', borderRadius: 6, fontFamily: 'monospace', fontSize: 12, boxSizing: 'border-box' }}
+            value={roomLink}
+            readOnly
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
+            ⚠️ 链接含一次性房间口令，请通过可信渠道发送。连接建立后，请与对方通过电话/当面核对下方「安全码」一致，再开始聊天——这是排除中间人（含信令服务器作恶）的关键一步。
+          </p>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button style={styles.btn} onClick={() => copyToClipboard(roomLink)}>📋 复制链接</button>
+            <button style={styles.btnSecondary} onClick={() => setShowRoomDialog(false)}>收起</button>
+          </div>
+        </div>
+      )}
+
+      {/* 关于 / 隐私与本地数据（默认折叠，点头部「ⓘ 关于」展开，减轻首屏密度） */}
+      {showAbout && (
+        <div style={{ padding: '10px 12px', background: '#f1f8f4', borderTop: '1px solid #e0eee5', fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span title="消息端到端加密、点对点直传；服务器仅做配对中转，不经手也不存储任何消息">
+            🔒 服务器不保存任何聊天记录；消息端到端加密、点对点直传。聊天记录仅存于本设备浏览器（关闭页面即清，不上传）。
+          </span>
+          <button
+            style={{ padding: '3px 10px', fontSize: 12, border: '1px solid #e0b4b4', borderRadius: 5, background: 'white', color: '#c0392b', cursor: 'pointer' }}
+            onClick={async () => {
+              if (!window.confirm('清除本设备的全部本地数据？\n\n将删除本浏览器内保存的加密身份与所有本地数据，且不可恢复（服务器本就不存任何数据）。清除后回到「设置口令」从头开始。')) return;
+              try { await (window as any).electronAPI?.system?.clearLocalData?.(); } catch { /* ignore */ }
+              window.location.reload();
+            }}
+            title="删除本浏览器保存的身份与全部本地数据，回到初始状态"
+          >
+            清除本地数据
+          </button>
+        </div>
+      )}
 
       {/* 消息区域 */}
       <div style={styles.messagesContainer}>
+        {messages.length === 0 && (
+          <div style={{ color: '#aaa', textAlign: 'center', marginTop: 48, fontSize: 13, lineHeight: 1.8, whiteSpace: 'pre-line' }}>
+            {connectionStatus === 'connected'
+              ? '加密通道已建立，发条消息开始聊天吧。'
+              : '点「🔗 创建房间」生成链接发给对方，\n或打开对方发来的链接，即可开始端到端加密聊天。'}
+          </div>
+        )}
         {messages.map((message) => (
           <div
             key={message.id}
@@ -1079,29 +1197,6 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
           {(t.chat as any).send ?? '发送'}
         </button>
       </div>
-
-      {/* 房间链接对话框（host）：把链接发给对方，对方打开即自动加入 */}
-      {showRoomDialog && (
-        <div style={styles.modal}>
-          <div style={styles.modalContent}>
-            <h3>🔗 房间已创建</h3>
-            <p>把下面的链接发给对方，对方在浏览器打开即可自动加入并建立加密连接：</p>
-            <textarea style={styles.textarea} value={roomLink} readOnly />
-            <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '8px 10px', borderRadius: 6 }}>
-              ⚠️ 链接中含一次性房间口令，请通过可信渠道发送。连接建立后，<strong>务必与对方通过电话/当面核对安全码</strong>，
-              一致后再开始聊天——这是排除中间人（含信令服务器作恶）的关键一步。
-            </p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button style={styles.btnSecondary} onClick={() => setShowRoomDialog(false)}>
-                关闭
-              </button>
-              <button style={styles.btn} onClick={() => copyToClipboard(roomLink)}>
-                📋 复制链接
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* 加入房间对话框（guest）：手动粘贴房间链接（通常直接打开链接即可，无需这一步） */}
       {showJoinDialog && (

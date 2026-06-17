@@ -294,7 +294,7 @@ class SignalingServer {
 
         switch (message.type) {
             case 'join_room':
-                this.handleJoinRoom(ws, message.roomId, message.token);
+                this.handleJoinRoom(ws, message.roomId, message.token, message.maxClients);
                 break;
 
             case 'leave_room':
@@ -326,7 +326,7 @@ class SignalingServer {
         }
     }
     
-    handleJoinRoom(ws, roomId, token) {
+    handleJoinRoom(ws, roomId, token, maxClients) {
         const client = this.clients.get(ws);
         if (!client) return;
 
@@ -355,8 +355,11 @@ class SignalingServer {
         let room = this.rooms.get(roomId);
 
         if (!room) {
-            // 首位加入者建立房间并锁定 token
-            room = { clients: new Set(), tokenHash };
+            // 首位加入者（房主）建立房间并锁定 token 与人数上限。
+            // 上限由房主指定，默认 2（严格一对一），并夹紧到 [2, MAX_ROOM_CLIENTS]。
+            let cap = Number.isInteger(maxClients) ? maxClients : 2;
+            cap = Math.max(2, Math.min(MAX_ROOM_CLIENTS, cap));
+            room = { clients: new Set(), tokenHash, maxClients: cap };
             this.rooms.set(roomId, room);
         } else if (!this.tokenHashMatches(room.tokenHash, tokenHash)) {
             console.warn(`🚫 房间 token 不匹配: ${roomId}`);
@@ -364,7 +367,9 @@ class SignalingServer {
             return this.sendMessage(ws, { type: 'error', error: 'Invalid room token' });
         }
 
-        if (room.clients.size >= MAX_ROOM_CLIENTS) {
+        // 人数上限以房主创建时锁定的值为准（后续加入者无法放宽）。
+        const roomCap = room.maxClients || MAX_ROOM_CLIENTS;
+        if (room.clients.size >= roomCap) {
             this.recordFailedJoin(ip);
             return this.sendMessage(ws, { type: 'error', error: 'Room full' });
         }

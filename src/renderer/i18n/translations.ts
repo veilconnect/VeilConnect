@@ -22,7 +22,6 @@ export interface Translations {
   
   // 身份设置
   identity: {
-    title: string;
     generateButton: string;
     clearButton: string;
     status: {
@@ -178,7 +177,6 @@ export const translations: Record<string, Translations> = {
     },
     
     identity: {
-      title: '🔑 身份管理',
       generateButton: '生成新身份',
       clearButton: '清除身份',
       status: {
@@ -325,7 +323,6 @@ export const translations: Record<string, Translations> = {
     },
     
     identity: {
-      title: '🔑 Identity Management',
       generateButton: 'Generate New Identity',
       clearButton: 'Clear Identity',
       status: {
@@ -472,7 +469,6 @@ export const translations: Record<string, Translations> = {
     },
     
     identity: {
-      title: '🔑 アイデンティティ管理',
       generateButton: '新しいアイデンティティを生成',
       clearButton: 'アイデンティティをクリア',
       status: {
@@ -619,7 +615,6 @@ export const translations: Record<string, Translations> = {
     },
     
     identity: {
-      title: '🔑 Gestión de Identidad',
       generateButton: 'Generar Nueva Identidad',
       clearButton: 'Limpiar Identidad',
       status: {
