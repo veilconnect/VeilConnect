@@ -234,6 +234,13 @@ ctx.onmessage = async (e: MessageEvent) => {
       await bootstrap(msg.passphrase);
       return reply(msg.id, true, true);
     }
+    if (msg.type === 'reset') {
+      // 忘记口令：清空本地 keyring 与各库数据，回到未初始化状态（旧身份不可恢复）。
+      cryptoManager = identityManager = dbManager = messageHistoryManager = presenceManager = null;
+      booted = false;
+      await BrowserKeyStore.reset();
+      return reply(msg.id, true, true);
+    }
     if (msg.type === 'invoke') {
       if (!booted) return reply(msg.id, false, undefined, 'Worker 未解锁');
       const handler = handlers[msg.channel];

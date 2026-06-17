@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import VeilConnectApp from '../renderer/VeilConnectApp';
 import '../renderer/VeilConnectApp.css';
-import { installElectronAPI, isKeyStoreInitialized, unlock } from './bridge/electronAPI';
+import { installElectronAPI, isKeyStoreInitialized, unlock, resetKeyStore } from './bridge/electronAPI';
 
 installElectronAPI();
 
@@ -46,6 +46,21 @@ const UnlockGate: React.FC = () => {
     } catch (err: any) {
       setError(err?.message || '解锁失败');
     } finally {
+      setBusy(false);
+    }
+  };
+
+  // 忘记口令：清空本地身份后重置为「首次设置」流程（旧身份不可恢复）。
+  const resetIdentity = async () => {
+    if (!window.confirm('确定重置吗？\n\n本设备上的旧身份将被永久清除、无法恢复（口令无法找回是端到端加密的设计）。\n清除后可用新口令创建一个全新身份继续使用。')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await resetKeyStore();
+      // 重置后重新初始化页面：回到「首次设置口令」流程
+      window.location.reload();
+    } catch (err: any) {
+      setError(err?.message || '重置失败');
       setBusy(false);
     }
   };
@@ -108,8 +123,19 @@ const UnlockGate: React.FC = () => {
           {busy ? '处理中…' : initialized ? '解锁' : '创建并进入'}
         </button>
 
+        {initialized === true && (
+          <button
+            type="button"
+            onClick={resetIdentity}
+            disabled={busy}
+            style={{ width: '100%', marginTop: 10, padding: '8px', background: 'none', color: '#888', border: '1px solid #e0e0e0', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}
+          >
+            忘记口令？重置并新建身份
+          </button>
+        )}
+
         <p style={{ margin: '16px 0 0', color: '#999', fontSize: 12, lineHeight: 1.5 }}>
-          口令在本浏览器派生主密钥解密本地身份，绝不上传。忘记口令将无法恢复本设备身份（可用加密导出的身份文件在新设备恢复）。
+          口令在本浏览器派生主密钥解密本地身份，绝不上传。忘记口令将无法恢复旧身份；可点上方「重置并新建身份」用新口令重来（或用此前加密导出的身份文件在新设备恢复）。
         </p>
       </form>
     </div>

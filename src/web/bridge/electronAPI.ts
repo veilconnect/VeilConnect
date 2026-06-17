@@ -57,6 +57,10 @@ export function isKeyStoreInitialized(): Promise<boolean> {
 export function unlock(passphrase: string): Promise<boolean> {
   return post('unlock', { passphrase });
 }
+// 忘记口令：清空本地身份与密钥，重置为未初始化（之后可用新口令重新创建身份）。
+export function resetKeyStore(): Promise<boolean> {
+  return post('reset');
+}
 
 const electronAPI = {
   identity: {

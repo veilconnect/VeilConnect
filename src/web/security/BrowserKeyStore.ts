@@ -160,6 +160,22 @@ export class BrowserKeyStore {
   }
 
   /**
+   * 重置：清空本地全部数据（keyring + 各库），回到「未初始化」状态。
+   * 用于「忘记口令」——旧身份不可恢复，清空后可用新口令重新创建身份。
+   * 清空的是同一 IndexedDB 库的整个 kv 存储（含 electron-store-shim 写入的身份/密钥）。
+   */
+  static async reset(): Promise<void> {
+    this.lock();
+    const db = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(OBJ_STORE, 'readwrite');
+      tx.objectStore(OBJ_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  /**
    * 取某库的 per-store 密钥；不存在则生成并写回 keyring（对齐 SecureKeyStore.getKey 的语义）。
    */
   static async getKey(name: string): Promise<string> {
