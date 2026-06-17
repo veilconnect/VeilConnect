@@ -81,10 +81,11 @@ curl -fsSL https://raw.githubusercontent.com/veilconnect/VeilConnect/main/script
 
 完成后按提示访问 `https://<域名或IP[:端口]>`。代码默认克隆到 `/opt/veilconnect`。
 
-**一键卸载**（停栈，删容器/网络/卷/全部镜像含 caddy+coturn；`--purge` 再清悬空镜像与构建缓存 + 移除 ufw 规则 + 删除安装目录，残留全清）：
+**一键卸载**（默认即自动彻底清理：容器/网络/卷/全部镜像含 caddy+coturn、悬空镜像与构建缓存、ufw 规则、安装目录，全部自动清掉，无需任何参数）：
 
 ```bash
-sudo bash /opt/veilconnect/scripts/uninstall.sh --purge
+sudo bash /opt/veilconnect/scripts/uninstall.sh
+# 谨慎选项：--keep-dir 保留安装目录/.env；--keep-cache 不动全局构建缓存(多项目共用机器)
 ```
 
 > 已 clone 仓库者也可直接：`sudo bash scripts/install.sh [域名|--local]`。
