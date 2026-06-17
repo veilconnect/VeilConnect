@@ -1,13 +1,26 @@
 # 局域网 / 无公网域名场景：Caddy 用内置 CA 自签证书（tls internal）。
-# 浏览器首次访问会提示证书不受信任，点「继续/信任」即可——之后即为安全上下文(HTTPS)，
-# WebCrypto / WebRTC 正常工作。适合内网、无域名、无备案的快速自部署。
+# 浏览器首次访问会提示证书不受信任——这是因为该 CA 不被系统预信任，并非连接不安全。
+# 想彻底消除提示：访问 https://<地址>/root-ca.crt 下载根证书，在设备上安装一次到「受信任根证书」即可。
+# （网页无法静默安装 CA，这是浏览器/系统的安全限制；要真正零客户端配置请改用「域名 + Let's Encrypt」部署。）
 {
-	# 用 IP 访问时浏览器/客户端不发送 SNI，需指定默认 SNI 才能匹配到自签证书。
+	# 用 IP 访问时不发送 SNI，需默认 SNI 才能匹配自签证书
 	default_sni {$DOMAIN}
 }
-# 站点地址带上 {$HTTPS_PORT}，使 Caddy 监听端口与浏览器访问端口一致（容器内外同端口映射）。
 {$DOMAIN}:{$HTTPS_PORT} {
 	encode zstd gzip
 	tls internal
-	reverse_proxy app:3001
+
+	# 根证书一键下载入口：客户端访问 /root-ca.crt 即可下载并安装（一次性消除证书警告）
+	@ca path /root-ca.crt
+	handle @ca {
+		header Content-Type application/x-x509-ca-cert
+		header Content-Disposition "attachment; filename=\"veilconnect-root-ca.crt\""
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		file_server
+	}
+
+	handle {
+		reverse_proxy app:3001
+	}
 }
