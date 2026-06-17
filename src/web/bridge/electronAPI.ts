@@ -164,6 +164,11 @@ const electronAPI = {
         /* 通知不可用时静默 */
       }
     }
+  },
+
+  // 本机数据管理（网页版特有）：清除本设备本地数据（身份+所有库）。
+  system: {
+    clearLocalData: () => post('reset')
   }
 };
 

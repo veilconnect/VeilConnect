@@ -1008,6 +1008,31 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ onClose, userIdent
         )}
       </div>
 
+      {/* 隐私与本地数据说明 */}
+      <div style={{ padding: '6px 12px', background: '#f1f8f4', borderTop: '1px solid #e0eee5', fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span title="消息端到端加密、点对点直传；服务器仅做配对中转，不经手也不存储任何消息">
+          🔒 服务器不保存任何聊天记录；消息端到端加密、点对点直传。聊天记录仅存于本设备浏览器（关闭页面即清，不上传）。
+        </span>
+        <button
+          style={{ padding: '3px 10px', fontSize: 12, border: '1px solid #cdd', borderRadius: 5, background: 'white', cursor: 'pointer' }}
+          onClick={() => { setMessages([]); }}
+          title="仅清空当前页面显示的消息"
+        >
+          清空对话
+        </button>
+        <button
+          style={{ padding: '3px 10px', fontSize: 12, border: '1px solid #e0b4b4', borderRadius: 5, background: 'white', color: '#c0392b', cursor: 'pointer' }}
+          onClick={async () => {
+            if (!window.confirm('清除本设备的全部本地数据？\n\n将删除本浏览器内保存的加密身份与所有本地数据，且不可恢复（服务器本就不存任何数据）。清除后回到「设置口令」从头开始。')) return;
+            try { await (window as any).electronAPI?.system?.clearLocalData?.(); } catch { /* ignore */ }
+            window.location.reload();
+          }}
+          title="删除本浏览器保存的身份与全部本地数据，回到初始状态"
+        >
+          清除本地数据
+        </button>
+      </div>
+
       {/* 消息区域 */}
       <div style={styles.messagesContainer}>
         {messages.map((message) => (
