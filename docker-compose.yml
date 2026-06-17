@@ -37,6 +37,8 @@ services:
       --use-auth-secret
       --static-auth-secret=${TURN_SECRET}
       --min-port=49160 --max-port=49200
+      --listening-ip=${EXTERNAL_IP}
+      --relay-ip=${EXTERNAL_IP}
       --external-ip=${EXTERNAL_IP}
       --no-multicast-peers
 
