@@ -35,13 +35,15 @@ HTTP_PORT=80; HTTPS_PORT=443
   v=$(grep '^HTTPS_PORT=' "$DIR/.env" | cut -d= -f2-); [ -n "$v" ] && HTTPS_PORT="$v"
 }
 
-echo "→ 停止并删除容器/网络/卷/本地镜像…"
+echo "→ 停止并删除容器/网络/卷/镜像（含 caddy/coturn 基础镜像）…"
 if [ -n "$COMPOSE" ]; then
-  $COMPOSE down -v --rmi local --remove-orphans 2>/dev/null || true
+  $COMPOSE down -v --rmi all --remove-orphans 2>/dev/null || true
 fi
-# 兜底清理可能残留的同名容器
+# 兜底：清理可能残留的同名容器、本项目镜像、命名卷
 docker rm -f veilconnect-app-1 veilconnect-coturn-1 veilconnect-caddy-1 \
              veilconnect_app_1 veilconnect_coturn_1 veilconnect_caddy_1 2>/dev/null || true
+docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null | grep -iE 'veilconnect' | awk '{print $2}' | xargs -r docker rmi -f 2>/dev/null || true
+docker volume ls -q 2>/dev/null | grep -i veilconnect | xargs -r docker volume rm -f 2>/dev/null || true
 
 if [ "$PURGE" = "1" ]; then
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -50,6 +52,9 @@ if [ "$PURGE" = "1" ]; then
       ufw delete allow "$r" >/dev/null 2>&1 || true
     done
   fi
+  echo "→ 清理悬空镜像与未使用的构建缓存（reclaim VeilConnect 构建残留）…"
+  docker image prune -f >/dev/null 2>&1 || true
+  docker builder prune -f >/dev/null 2>&1 || true
   echo "→ 删除安装目录 $DIR…"
   cd /    # 离开目录再删，避免删除运行中的 CWD
   rm -rf "$DIR"
