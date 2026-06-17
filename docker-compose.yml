@@ -22,6 +22,8 @@ services:
       TURN_HOST: "${DOMAIN}"
       TURN_PORT: "3478"
       TURN_TTL: "3600"
+      # 中继传输：both(默认)|tcp|udp。wg/隧道环境设 tcp 更稳（避免 UDP MTU/分片导致 DTLS 握手失败）。
+      TURN_TRANSPORT: "${TURN_TRANSPORT:-both}"
     expose:
       - "3001"
 

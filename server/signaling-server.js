@@ -198,10 +198,11 @@ class SignalingServer {
             const port = process.env.TURN_PORT || '3478';
             const username = String(Math.floor(Date.now() / 1000) + ttl);
             const credential = require('crypto').createHmac('sha1', secret).update(username).digest('base64');
-            const urls = [
-                `turn:${host}:${port}?transport=udp`,
-                `turn:${host}:${port}?transport=tcp`
-            ];
+            // TURN_TRANSPORT: both(默认) | tcp | udp。隧道(wg)环境下 TCP 中继比 UDP 更稳(避免 MTU/分片)。
+            const transport = (process.env.TURN_TRANSPORT || 'both').toLowerCase();
+            const urls = [];
+            if (transport !== 'tcp') urls.push(`turn:${host}:${port}?transport=udp`);
+            if (transport !== 'udp') urls.push(`turn:${host}:${port}?transport=tcp`);
             if (process.env.TURNS_PORT) {
                 urls.push(`turns:${host}:${process.env.TURNS_PORT}?transport=tcp`);
             }
