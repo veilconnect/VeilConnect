@@ -14,8 +14,9 @@ services:
     restart: unless-stopped
     environment:
       PORT: "3001"
-      # 网页与信令同源：Origin 即 https://<DOMAIN>，必须在白名单内
-      ALLOWED_ORIGINS: "https://${DOMAIN}"
+      # 网页与信令同源 Origin 白名单。install.sh 会按端口写好 PUBLIC_ORIGIN；
+      # 手动部署须在 .env 设 PUBLIC_ORIGIN=https://<域名或IP[:端口]>。
+      ALLOWED_ORIGINS: "${PUBLIC_ORIGIN}"
       # /turn-credentials 用这些签发 coturn 时限凭据（须与 coturn 的 static-auth-secret/realm 一致）
       TURN_SECRET: "${TURN_SECRET}"
       TURN_HOST: "${DOMAIN}"
@@ -38,18 +39,22 @@ services:
       --min-port=49160 --max-port=49200
       --external-ip=${EXTERNAL_IP}
       --no-multicast-peers
-      --no-loopback-peers
 
   caddy:
     image: caddy:2
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      # 容器内外端口一致，使 Caddy 站点端口与浏览器访问端口匹配（local 自定义端口必需）。
+      # 公网模式固定 80/443（Let's Encrypt ACME 要求）；local 自签模式可用 8080/8443 等。
+      - "${HTTP_PORT:-80}:${HTTP_PORT:-80}"
+      - "${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"
     environment:
       DOMAIN: "${DOMAIN}"
+      HTTP_PORT: "${HTTP_PORT:-80}"
+      HTTPS_PORT: "${HTTPS_PORT:-443}"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 默认公网自动 HTTPS 的 Caddyfile；local 模式改挂 Caddyfile.local（自签 tls internal）
+      - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
