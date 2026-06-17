@@ -114,7 +114,7 @@ EOF
 c_green "✓ 已写入 .env"
 
 # --- 5. 防火墙（仅在 ufw active 时操作） ---
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+if command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status 2>/dev/null | grep -q "Status: active"; then
   c_blue "→ 放行端口 ${HTTP_PORT}/${HTTPS_PORT}(tcp) 3478(udp+tcp) 49160-49200(udp)…"
   ufw allow ${HTTP_PORT}/tcp >/dev/null; ufw allow ${HTTPS_PORT}/tcp >/dev/null
   ufw allow 3478/tcp >/dev/null; ufw allow 3478/udp >/dev/null

@@ -54,7 +54,7 @@ docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null | grep -iE
 docker volume ls -q 2>/dev/null | grep -i veilconnect | xargs -r docker volume rm -f 2>/dev/null || true
 
 # ufw 规则（VeilConnect 自己加的端口，安全移除）
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+if command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status 2>/dev/null | grep -q "Status: active"; then
   echo "→ 移除 ufw 端口规则…"
   for r in "${HTTP_PORT}/tcp" "${HTTPS_PORT}/tcp" 3478/tcp 3478/udp 49160:49200/udp; do
     ufw delete allow "$r" >/dev/null 2>&1 || true
