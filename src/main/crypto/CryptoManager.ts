@@ -13,6 +13,19 @@ export interface EncryptedMessage {
   timestamp: number;
 }
 
+/**
+ * X25519（NaCl box）密钥管理。
+ *
+ * ⚠️ 安全模型注记（避免误读）：网页版的**实时聊天消息不走本类**——实时收发由
+ * `RatchetManager`（Double Ratchet）端到端加密，提供每条消息级前向保密与断后向自愈。
+ * 本类在当前网页版中的**唯一实时职责**是产出 box 公钥（`getPublicKey`/`generateKeyPair`），
+ * 由 `IdentityManager.attachBoxPublicKey` 用 Ed25519 身份私钥签名后绑定进身份，供对端验签防 MITM。
+ *
+ * 其余 `encryptMessage/decryptMessage/encrypt/decrypt/encryptFile/decryptFile/verifySignature`
+ * 是自桌面端移植保留、且有单元测试覆盖的通用 NaCl box / Ed25519 原语，
+ * 但**未接入网页实时消息路径**（无对应 worker channel 调用）。保留作为离线/文件等场景的可用原语；
+ * 切勿据此误以为聊天消息走的是静态 box 共享密钥。
+ */
 export class CryptoManager {
   private store: Store;
   private keyPair: nacl.BoxKeyPair | null = null;

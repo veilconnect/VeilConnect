@@ -239,7 +239,7 @@ export class IdentityManager {
   }
 
   /**
-   * 含私钥的加密导出，使用 PBKDF2-SHA256(100k) 派生密钥 + AES-256-GCM。
+   * 含私钥的加密导出，使用 PBKDF2-SHA256(600k，见 PBKDF2_ITERATIONS) 派生密钥 + AES-256-GCM。
    * 输出 JSON: { version, encrypted: true, salt, iv, authTag, ciphertext }（均 base64）。
    */
   public exportIdentityEncrypted(password: string): string {
