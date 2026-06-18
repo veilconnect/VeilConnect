@@ -20,3 +20,7 @@ Thumbs.db
 # 本地环境
 .env
 .env.local
+.env.*
+
+# 本机专用手动测试脚本（写死 LAN IP/口令，不入库）
+web-host11.mjs
