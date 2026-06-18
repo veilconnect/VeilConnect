@@ -38,6 +38,13 @@ class SignalingServer {
             ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
             : DEFAULT_ALLOWED_ORIGINS);
 
+        // 反向代理跳数：默认 0（直接暴露，按 socket 源地址识别 IP，不可伪造）。
+        // 部署在 Caddy/Nginx 等反代之后必须设为代理跳数（单层 Caddy = 1），
+        // 否则所有用户在服务端都呈现为代理容器的同一个 IP，导致按 IP 的限流/防爆破全部退化为全局阈值。
+        // 取 X-Forwarded-For 的「倒数第 trustProxyHops 段」：每经过一层可信代理都会向 XFF 追加它直连的对端地址，
+        // 故倒数第 1 段是 Caddy 亲自写入的真实客户端地址，无法被客户端伪造（客户端伪造的内容只会出现在更靠左的位置）。
+        this.trustProxyHops = parseInt(process.env.TRUST_PROXY || '0', 10) || 0;
+
         this.setupMiddleware();
         this.setupRoutes();
         this.setupWebSocket();
@@ -45,6 +52,25 @@ class SignalingServer {
 
         console.log('🚀 VeilConnect 信令服务器初始化完成');
         console.log(`🔐 Allowed origins: ${this.allowedOrigins.join(', ')}`);
+        console.log(`🔀 Trust proxy hops: ${this.trustProxyHops}${this.trustProxyHops === 0 ? ' (直接暴露；若在反代后请设 TRUST_PROXY=代理跳数)' : ''}`);
+    }
+
+    /**
+     * 解析客户端真实 IP（用于限流 / 防 token 爆破 / TURN 凭据限速）。
+     * trustProxyHops=0：直接用 socket 源地址（直连暴露，不可伪造）。
+     * trustProxyHops=N>0：取 X-Forwarded-For 的倒数第 N 段（最近的 N 层可信代理各追加一段，
+     *   倒数第 N 段即最外层可信代理之外的真实客户端，客户端无法伪造该位置）。
+     */
+    clientIp(req) {
+        if (this.trustProxyHops > 0) {
+            const raw = (req && req.headers && req.headers['x-forwarded-for']) || '';
+            const chain = raw.split(',').map(s => s.trim()).filter(Boolean);
+            if (chain.length) {
+                const idx = chain.length - this.trustProxyHops;
+                return chain[idx >= 0 ? idx : 0];
+            }
+        }
+        return (req && req.socket && req.socket.remoteAddress) || 'unknown';
     }
 
     isOriginAllowed(origin) {
@@ -54,7 +80,7 @@ class SignalingServer {
 
     verifyClient(info, cb) {
         const origin = info.origin || info.req.headers.origin;
-        const remoteIp = (info.req.socket && info.req.socket.remoteAddress) || 'unknown';
+        const remoteIp = this.clientIp(info.req);
 
         if (!this.isOriginAllowed(origin)) {
             console.warn(`🚫 拒绝连接（origin 不在白名单）: ${origin} from ${remoteIp}`);
@@ -184,7 +210,7 @@ class SignalingServer {
         // 需环境变量 TURN_SECRET + TURN_HOST（与 coturn 的 static-auth-secret/realm 一致）。
         this.app.get('/turn-credentials', (req, res) => {
             // 每 IP 限速，缓解无鉴权端点被脚本反复拉取以盗刷 TURN 中继带宽
-            const ip = (req.socket && req.socket.remoteAddress) || 'unknown';
+            const ip = this.clientIp(req);
             if (!this.checkRateLimit(ip)) {
                 return res.status(429).json({ error: 'Too many requests' });
             }
@@ -238,7 +264,7 @@ class SignalingServer {
                 joinedAt: new Date().toISOString(),
                 lastSeen: Date.now(),
                 roomId: null,
-                ip: (req.socket && req.socket.remoteAddress) || 'unknown',
+                ip: this.clientIp(req),
                 userAgent: req.headers['user-agent'] || 'unknown'
             };
             

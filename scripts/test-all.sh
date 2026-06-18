@@ -19,6 +19,18 @@ if npm run -s typecheck; then ok "typecheck"; else bad "typecheck"; fi
 step "② 单元 + 集成测试 (jest)"
 if npm test --silent; then ok "jest"; else bad "jest"; fi
 
+# ②b 信令服务器安全加固测试（默认 roots 不含 server/，需显式覆盖；依赖 server/node_modules 的 ws）
+step "②b 信令服务器安全测试 (jest server/)"
+if node -e "require('./server/node_modules/ws')" >/dev/null 2>&1; then
+  if npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js" --silent; then
+    ok "signaling (token/限速/反代真实IP)"
+  else
+    bad "signaling"
+  fi
+else
+  skip "signaling" "server/node_modules 缺 ws（cd server && npm i）"
+fi
+
 # ③ 生产构建
 step "③ 生产构建 (webpack)"
 if npm run -s build; then ok "build"; else bad "build"; fi

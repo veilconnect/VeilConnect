@@ -122,6 +122,7 @@ ALLOWED_ORIGINS="http://localhost:3001" PORT=3001 npm run serve
 | 消息体积上限 | WS payload 64KB / HTTP body 64KB |
 | 房间容量 | 默认 4 人 |
 | 心跳超时 | 90s 未活跃自动断开 |
+| 反代真实 IP | 跑在 Caddy/Nginx 反代之后须设 `TRUST_PROXY=代理跳数`（本栈 docker-compose 已默认 `=1`），按 `X-Forwarded-For` 倒数第 N 段取真实客户端 IP。**不设则上面所有「每 IP」限流会退化为全局阈值**（少量连接即触顶、防 token 爆破失效）；直连裸跑时保持 0 以免信任伪造的 XFF |
 
 ---
 
@@ -174,17 +175,20 @@ cipher = AES-256-GCM(JSON.stringify(identity), key, iv)
 
 ```
 $ npm test
-Test Suites: 8 passed, 8 total
-Tests:       77 passed, 77 total
+Test Suites: 7 passed, 7 total
+Tests:       74 passed, 74 total
 
 File                       | % Stmts | % Branch | % Funcs | % Lines
-All files                  |   83.66 |    60.17 |    86.2 |   85.44
+All files                  |   86.26 |    62.13 |   87.15 |   88.32
  CryptoManager.ts          |   91.66 |    28.57 |     100 |   91.66
  RatchetManager.ts         |   93.22 |       75 |       88 |    93.1
- IdentityManager.ts        |   72.15 |    47.27 |   69.23 |   75.51
+ IdentityManager.ts        |   75.31 |    50.90 |   73.07 |   78.91
  PresenceManager.ts        |   98.07 |      100 |   93.75 |    100
  MessageHistoryManager.ts  |   90.69 |       75 |   89.65 |   93.93
 ```
+
+> 信令服务器的安全加固测试（房间 token、失败 join 限速、反代真实 IP 解析）单独跑（依赖 `server/node_modules`）：
+> `npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js"` → 8 passed。
 
 关键的安全断言（不仅是 happy path）：
 
@@ -233,6 +237,7 @@ React UI ──调用──► window.electronAPI.<域>.<方法>
 
 ## 限制 / 已知问题
 
+- **根信任在「下发网页的服务器」**：与可独立审计、签名分发的桌面/移动客户端不同，网页版的 HTML/JS 每次都由部署者的服务器现场下发。**一个恶意或被攻陷的部署者可以下发被植入的脚本，窃取用户口令与私钥**——E2EE 数学再正确也挡不住「客户端代码本身被换掉」。因此请只使用你信任的部署、优先自建；高威胁场景应核对资源完整性（SRI/固定版本）或改用桌面客户端。这是浏览器端 E2EE 的固有信任边界，务必让用户知情。
 - **必须 HTTPS**：浏览器 WebCrypto/WebRTC 需安全上下文，自部署栈用 Caddy 自动 HTTPS 满足；localhost 联调豁免。
 - **浏览器密钥保护弱于桌面版**：无 OS keychain，私钥靠用户口令加密落 IndexedDB；Web Worker 仅软隔离。忘记口令需用加密导出的身份文件在新设备恢复。
 - **聊天本身无消息持久化**：`SimpleP2PChat` 关闭即丢历史。`MessageHistoryManager` 已实现但还没接 UI。

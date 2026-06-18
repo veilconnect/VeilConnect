@@ -156,6 +156,37 @@ describe('SignalingServer 安全加固', () => {
         expect(err.error).toMatch(/16-128 chars/);
     });
 
+    describe('clientIp（反代后真实 IP 解析）', () => {
+        const fakeReq = (xff, socketIp = '10.0.0.5') => ({
+            headers: xff === undefined ? {} : { 'x-forwarded-for': xff },
+            socket: { remoteAddress: socketIp }
+        });
+        let saved;
+        beforeEach(() => { saved = server.trustProxyHops; });
+        afterEach(() => { server.trustProxyHops = saved; });
+
+        test('trustProxyHops=0：忽略 XFF，用 socket 源地址（防伪造）', () => {
+            server.trustProxyHops = 0;
+            expect(server.clientIp(fakeReq('1.2.3.4', '10.0.0.5'))).toBe('10.0.0.5');
+        });
+
+        test('trustProxyHops=1：取 XFF 倒数第 1 段（代理亲自追加的真实客户端）', () => {
+            server.trustProxyHops = 1;
+            // 客户端伪造了 1.2.3.4，Caddy 追加真实对端 203.0.113.9 → 取最右
+            expect(server.clientIp(fakeReq('1.2.3.4, 203.0.113.9'))).toBe('203.0.113.9');
+        });
+
+        test('trustProxyHops=1 但无 XFF：回退 socket 源地址', () => {
+            server.trustProxyHops = 1;
+            expect(server.clientIp(fakeReq(undefined, '198.51.100.7'))).toBe('198.51.100.7');
+        });
+
+        test('trustProxyHops=2：取倒数第 2 段（两层可信代理）', () => {
+            server.trustProxyHops = 2;
+            expect(server.clientIp(fakeReq('1.1.1.1, 203.0.113.9, 172.16.0.1'))).toBe('203.0.113.9');
+        });
+    });
+
     test('同一连接/IP 多次失败 join 后被限速', async () => {
         const a = await connect();
         sockets.push(a);

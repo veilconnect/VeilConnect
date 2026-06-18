@@ -14,6 +14,9 @@ services:
     restart: unless-stopped
     environment:
       PORT: "3001"
+      # 本栈中 app 固定跑在 Caddy 反代之后（单层），故按 X-Forwarded-For 倒数第 1 段识别真实客户端 IP，
+      # 否则所有用户都呈现为 caddy 容器的同一 IP，按 IP 的连接/失败 join/TURN 限流会退化为全局阈值（易自我 DoS、防爆破失效）。
+      TRUST_PROXY: "1"
       # 网页与信令同源 Origin 白名单。install.sh 会按端口写好 PUBLIC_ORIGIN；
       # 手动部署须在 .env 设 PUBLIC_ORIGIN=https://<域名或IP[:端口]>。
       ALLOWED_ORIGINS: "${PUBLIC_ORIGIN}"
