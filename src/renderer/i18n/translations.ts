@@ -152,6 +152,80 @@ export interface Translations {
     sendFailed: string;
     idCopied: string;
     send: string;
+    // —— P2P 聊天界面（SimpleP2PChat）补齐文案 ——
+    p2p: {
+      headerTitle: string;
+      editNicknameTitle: string;
+      mePrefix: string;
+      unnamed: string;
+      badgeVerifiedTitle: string;
+      badgeVerified: string;
+      badgeEncryptedTitle: string;
+      badgePendingSas: string;
+      badgeHandshaking: string;
+      badgeFailed: string;
+      aboutTitle: string;
+      aboutToggle: string;
+      sasDialogTitle: string;
+      sasDialogBodyLine1: string;
+      sasDialogBodyLine2: string;
+      peerPrefix: string;
+      sasAgree: string;
+      sasDisagree: string;
+      sasBarLabel: string;
+      sasVerifiedMark: string;
+      createRoomTitle: string;
+      createRoomBtn: string;
+      oneToOneNote: string;
+      joinRoomBtn: string;
+      roomCreatedHeading: string;
+      establishingEncrypted: string;
+      waitingPeerJoin: string;
+      roomLinkWarning: string;
+      copyLink: string;
+      collapse: string;
+      aboutPrivacyTitle: string;
+      aboutPrivacyBody: string;
+      clearDataTitle: string;
+      clearDataBtn: string;
+      emptyConnected: string;
+      emptyDisconnected: string;
+      placeholderWaitingSecure: string;
+      placeholderConfirmSas: string;
+      joinRoomDialogTitle: string;
+      pasteRoomLink: string;
+      cancel: string;
+      join: string;
+      loadIdentityFailed: string;
+      identityIncomplete: string;
+      secureChannelFailed: string;
+      e2eEstablished: string;
+      e2eEstablishing: string;
+      peerVerifyFailed: string;
+      relayNotice: string;
+      connectedEstablishing: string;
+      connectFailed: string;
+      peerDisconnected: string;
+      peerJoinedConnecting: string;
+      negotiationFailed: string;
+      negotiationError: string;
+      peerLeft: string;
+      signalingError: string;
+      roomReadyWaiting: string;
+      joinedConnecting: string;
+      serverConnectFailed: string;
+      notSecureYet: string;
+      verifySasFirst: string;
+      disconnectedManual: string;
+      copiedToClipboard: string;
+      relayNotReady: string;
+      sasMismatch: string;
+      nicknameUpdated: string;
+      nicknameUpdateFailed: string;
+      sasConfirmedToast: string;
+      setNicknamePrompt: string;
+      clearDataConfirm: string;
+    };
   };
 }
 
@@ -298,7 +372,80 @@ export const translations: Record<string, Translations> = {
       joinFailed: '加入连接失败',
       sendFailed: '发送消息失败',
       idCopied: '连接ID已复制到剪贴板',
-      send: '发送'
+      send: '发送',
+      p2p: {
+        headerTitle: '💬 P2P 安全聊天',
+        editNicknameTitle: '点击修改昵称（对方会看到）',
+        mePrefix: '我：',
+        unnamed: '未命名',
+        badgeVerifiedTitle: '消息已端到端加密，且你已带外核对安全码、确认无中间人',
+        badgeVerified: '🔒 已加密 · 已验证',
+        badgeEncryptedTitle: '消息已端到端加密，但尚未带外核对安全码，无法排除中间人',
+        badgePendingSas: '🔒 已加密 · 待核对安全码',
+        badgeHandshaking: '🔄 安全握手中…',
+        badgeFailed: '⛔ 验证失败',
+        aboutTitle: '关于 / 隐私与本地数据',
+        aboutToggle: 'ⓘ 关于',
+        sasDialogTitle: '🛡️ 核对安全码',
+        sasDialogBodyLine1: '和对方互相报一遍下面这串数字（电话/当面等可信渠道）。',
+        sasDialogBodyLine2: '一致才说明没有中间人——这是最关键的一步。',
+        peerPrefix: '对方：',
+        sasAgree: '✓ 一致，开始聊天',
+        sasDisagree: '✗ 不一致，断开',
+        sasBarLabel: '🛡️ 安全码',
+        sasVerifiedMark: '✓ 已核对一致',
+        createRoomTitle: '创建一个严格一对一房间：满 2 人后，再有人拿到链接也会被服务器拒绝（Room full）。',
+        createRoomBtn: '🔗 创建房间',
+        oneToOneNote: '· 一对一（满 2 人后自动锁房）',
+        joinRoomBtn: '🔌 加入房间',
+        roomCreatedHeading: '🔗 房间已创建 —— 把链接发给对方，对方在浏览器打开即自动加入',
+        establishingEncrypted: '🔄 正在建立加密连接…',
+        waitingPeerJoin: '● 等待对方加入…',
+        roomLinkWarning: '⚠️ 链接含一次性房间口令，请通过可信渠道发送。连接建立后，请与对方通过电话/当面核对下方「安全码」一致，再开始聊天——这是排除中间人（含信令服务器作恶）的关键一步。',
+        copyLink: '📋 复制链接',
+        collapse: '收起',
+        aboutPrivacyTitle: '消息端到端加密、点对点直传；服务器仅做配对中转，不经手也不存储任何消息',
+        aboutPrivacyBody: '🔒 服务器不保存任何聊天记录；消息端到端加密、点对点直传。聊天记录仅存于本设备浏览器（关闭页面即清，不上传）。',
+        clearDataTitle: '删除本浏览器保存的身份与全部本地数据，回到初始状态',
+        clearDataBtn: '清除本地数据',
+        emptyConnected: '加密通道已建立，发条消息开始聊天吧。',
+        emptyDisconnected: '点「🔗 创建房间」生成链接发给对方，\n或打开对方发来的链接，即可开始端到端加密聊天。',
+        placeholderWaitingSecure: '等待安全通道建立…',
+        placeholderConfirmSas: '请先核对安全码并点「一致，确认」…',
+        joinRoomDialogTitle: '🔌 加入房间',
+        pasteRoomLink: '粘贴对方发来的房间链接：',
+        cancel: '取消',
+        join: '加入',
+        loadIdentityFailed: '读取本地身份失败，请刷新页面重试。',
+        identityIncomplete: '本地身份不完整，无法建立加密通道，请重置身份后重试。',
+        secureChannelFailed: '建立加密通道失败，请重试。',
+        e2eEstablished: '🔐 端到端加密通道已建立。请与对方核对下方安全码一致后再开始聊天。',
+        e2eEstablishing: '🔐 正在建立端到端加密通道…',
+        peerVerifyFailed: '⛔ 对方身份验证失败，可能存在中间人攻击，已断开连接。',
+        relayNotice: '🔒 将通过中继服务器加密直连对方，你的真实 IP 不会暴露给对方。',
+        connectedEstablishing: '✅ 已连上对方，正在建立端到端加密…',
+        connectFailed: '建立连接失败，请重试。',
+        peerDisconnected: '与对方的连接已断开。',
+        peerJoinedConnecting: '对方已加入，正在连接…',
+        negotiationFailed: '连接协商失败，请重试。',
+        negotiationError: '连接协商出错，请重试。',
+        peerLeft: '对方已离开，本次会话已结束。',
+        signalingError: '连接服务异常，请稍后重试。',
+        roomReadyWaiting: '房间已就绪，等待对方加入…',
+        joinedConnecting: '已进入房间，正在连接对方…',
+        serverConnectFailed: '无法连接到服务器，请检查网络后重试。',
+        notSecureYet: '安全通道尚未建立，无法发送消息',
+        verifySasFirst: '请先与对方通过电话/当面核对安全码并确认一致，再发送消息',
+        disconnectedManual: '已断开连接',
+        copiedToClipboard: '已复制到剪贴板',
+        relayNotReady: '中继服务器未就绪，可能无法连接。如长时间连不上，请联系站点管理员。',
+        sasMismatch: '安全码不一致，疑似中间人，已断开',
+        nicknameUpdated: '昵称已更新',
+        nicknameUpdateFailed: '昵称更新失败',
+        sasConfirmedToast: '已确认安全码一致，可以开始聊天',
+        setNicknamePrompt: '设置你的昵称（对方会看到）：',
+        clearDataConfirm: '清除本设备的全部本地数据？\n\n将删除本浏览器内保存的加密身份与所有本地数据，且不可恢复（服务器本就不存任何数据）。清除后回到「设置口令」从头开始。'
+      }
     }
   },
   
@@ -444,7 +591,80 @@ export const translations: Record<string, Translations> = {
       joinFailed: 'Failed to join connection',
       sendFailed: 'Failed to send message',
       idCopied: 'Connection ID copied to clipboard',
-      send: 'Send'
+      send: 'Send',
+      p2p: {
+        headerTitle: '💬 P2P Secure Chat',
+        editNicknameTitle: 'Click to change your nickname (visible to your peer)',
+        mePrefix: 'Me: ',
+        unnamed: 'Unnamed',
+        badgeVerifiedTitle: 'Messages are end-to-end encrypted, and you have verified the safety code out-of-band — no man-in-the-middle',
+        badgeVerified: '🔒 Encrypted · Verified',
+        badgeEncryptedTitle: 'Messages are end-to-end encrypted, but the safety code has not been verified out-of-band, so a man-in-the-middle cannot be ruled out',
+        badgePendingSas: '🔒 Encrypted · Verify safety code',
+        badgeHandshaking: '🔄 Securing connection…',
+        badgeFailed: '⛔ Verification failed',
+        aboutTitle: 'About / Privacy & local data',
+        aboutToggle: 'ⓘ About',
+        sasDialogTitle: '🛡️ Verify safety code',
+        sasDialogBodyLine1: 'Read the digits below to each other over a trusted channel (phone / in person).',
+        sasDialogBodyLine2: 'Only if they match is there no man-in-the-middle — this is the most important step.',
+        peerPrefix: 'Peer: ',
+        sasAgree: '✓ They match, start chatting',
+        sasDisagree: '✗ They differ, disconnect',
+        sasBarLabel: '🛡️ Safety code',
+        sasVerifiedMark: '✓ Verified match',
+        createRoomTitle: 'Create a strict one-to-one room: once 2 people join, anyone else with the link is rejected by the server (Room full).',
+        createRoomBtn: '🔗 Create room',
+        oneToOneNote: '· One-to-one (locks after 2 join)',
+        joinRoomBtn: '🔌 Join room',
+        roomCreatedHeading: '🔗 Room created — send the link to your peer; it auto-joins when they open it in a browser',
+        establishingEncrypted: '🔄 Establishing encrypted connection…',
+        waitingPeerJoin: '● Waiting for peer to join…',
+        roomLinkWarning: '⚠️ The link contains a one-time room token; send it over a trusted channel. After connecting, verify the “safety code” below with your peer by phone / in person before chatting — this is the key step to rule out a man-in-the-middle (including a malicious signaling server).',
+        copyLink: '📋 Copy link',
+        collapse: 'Collapse',
+        aboutPrivacyTitle: 'Messages are end-to-end encrypted and sent peer-to-peer; the server only relays pairing and never handles or stores any message',
+        aboutPrivacyBody: '🔒 The server stores no chat history; messages are end-to-end encrypted and sent peer-to-peer. Chat history lives only in this device’s browser (cleared when the page closes, never uploaded).',
+        clearDataTitle: 'Delete the identity and all local data saved in this browser, returning to the initial state',
+        clearDataBtn: 'Clear local data',
+        emptyConnected: 'Encrypted channel established — send a message to start chatting.',
+        emptyDisconnected: 'Click “🔗 Create room” to generate a link for your peer,\nor open a link they sent you, to start an end-to-end encrypted chat.',
+        placeholderWaitingSecure: 'Waiting for the secure channel…',
+        placeholderConfirmSas: 'First verify the safety code and click “They match”…',
+        joinRoomDialogTitle: '🔌 Join room',
+        pasteRoomLink: 'Paste the room link your peer sent you:',
+        cancel: 'Cancel',
+        join: 'Join',
+        loadIdentityFailed: 'Failed to read local identity. Please refresh the page and try again.',
+        identityIncomplete: 'Local identity is incomplete; cannot establish an encrypted channel. Please reset your identity and try again.',
+        secureChannelFailed: 'Failed to establish the encrypted channel. Please try again.',
+        e2eEstablished: '🔐 End-to-end encrypted channel established. Verify the safety code below with your peer before chatting.',
+        e2eEstablishing: '🔐 Establishing end-to-end encrypted channel…',
+        peerVerifyFailed: '⛔ Peer identity verification failed — a man-in-the-middle may be present. Disconnected.',
+        relayNotice: '🔒 You will connect to your peer encrypted via a relay server; your real IP is not exposed to them.',
+        connectedEstablishing: '✅ Connected to peer, establishing end-to-end encryption…',
+        connectFailed: 'Failed to connect. Please try again.',
+        peerDisconnected: 'The connection to your peer has been closed.',
+        peerJoinedConnecting: 'Peer joined, connecting…',
+        negotiationFailed: 'Connection negotiation failed. Please try again.',
+        negotiationError: 'Connection negotiation error. Please try again.',
+        peerLeft: 'Your peer left; this session has ended.',
+        signalingError: 'The connection service had an error. Please try again later.',
+        roomReadyWaiting: 'Room ready, waiting for peer to join…',
+        joinedConnecting: 'Joined the room, connecting to peer…',
+        serverConnectFailed: 'Cannot connect to the server. Check your network and try again.',
+        notSecureYet: 'The secure channel is not ready; cannot send messages',
+        verifySasFirst: 'First verify the safety code with your peer by phone / in person and confirm it matches, then send messages',
+        disconnectedManual: 'Disconnected',
+        copiedToClipboard: 'Copied to clipboard',
+        relayNotReady: 'The relay server is not ready and the connection may fail. If it stays unreachable, contact the site administrator.',
+        sasMismatch: 'Safety code mismatch — possible man-in-the-middle. Disconnected.',
+        nicknameUpdated: 'Nickname updated',
+        nicknameUpdateFailed: 'Failed to update nickname',
+        sasConfirmedToast: 'Safety code confirmed as matching — you can start chatting',
+        setNicknamePrompt: 'Set your nickname (visible to your peer):',
+        clearDataConfirm: 'Clear all local data on this device?\n\nThis deletes the encrypted identity and all local data saved in this browser, and cannot be undone (the server stores nothing anyway). Afterwards you return to “Set passphrase” and start over.'
+      }
     }
   },
   
@@ -590,7 +810,80 @@ export const translations: Record<string, Translations> = {
       joinFailed: '接続への参加に失敗しました',
       sendFailed: 'メッセージの送信に失敗しました',
       idCopied: '接続IDがクリップボードにコピーされました',
-      send: '送信'
+      send: '送信',
+      p2p: {
+        headerTitle: '💬 P2P セキュアチャット',
+        editNicknameTitle: 'クリックしてニックネームを変更（相手に表示されます）',
+        mePrefix: '自分：',
+        unnamed: '名称未設定',
+        badgeVerifiedTitle: 'メッセージはエンドツーエンドで暗号化され、安全コードを帯域外で照合済み — 中間者はいません',
+        badgeVerified: '🔒 暗号化済み · 検証済み',
+        badgeEncryptedTitle: 'メッセージはエンドツーエンドで暗号化されていますが、安全コードを帯域外で照合していないため中間者を排除できません',
+        badgePendingSas: '🔒 暗号化済み · 安全コード未照合',
+        badgeHandshaking: '🔄 セキュア接続中…',
+        badgeFailed: '⛔ 検証失敗',
+        aboutTitle: '概要 / プライバシーとローカルデータ',
+        aboutToggle: 'ⓘ 概要',
+        sasDialogTitle: '🛡️ 安全コードの照合',
+        sasDialogBodyLine1: '下の数字を信頼できる経路（電話・対面など）で互いに読み上げてください。',
+        sasDialogBodyLine2: '一致して初めて中間者がいないと分かります — これが最も重要な手順です。',
+        peerPrefix: '相手：',
+        sasAgree: '✓ 一致、チャットを開始',
+        sasDisagree: '✗ 不一致、切断',
+        sasBarLabel: '🛡️ 安全コード',
+        sasVerifiedMark: '✓ 照合一致',
+        createRoomTitle: '厳密な1対1ルームを作成：2人が参加した後はリンクを持つ他の人もサーバーに拒否されます（Room full）。',
+        createRoomBtn: '🔗 ルーム作成',
+        oneToOneNote: '· 1対1（2人参加で自動ロック）',
+        joinRoomBtn: '🔌 ルームに参加',
+        roomCreatedHeading: '🔗 ルームを作成しました —— リンクを相手に送ってください。相手がブラウザで開くと自動的に参加します',
+        establishingEncrypted: '🔄 暗号化接続を確立中…',
+        waitingPeerJoin: '● 相手の参加を待機中…',
+        roomLinkWarning: '⚠️ リンクには使い捨てのルームトークンが含まれます。信頼できる経路で送ってください。接続後、下の「安全コード」を電話・対面で相手と照合し、一致を確認してからチャットを始めてください —— これは中間者（信号サーバーの不正を含む）を排除する重要な手順です。',
+        copyLink: '📋 リンクをコピー',
+        collapse: '折りたたむ',
+        aboutPrivacyTitle: 'メッセージはエンドツーエンドで暗号化されピアツーピアで直接送信されます。サーバーはペアリングの中継のみで、メッセージを扱わず保存もしません',
+        aboutPrivacyBody: '🔒 サーバーはチャット履歴を一切保存しません。メッセージはエンドツーエンドで暗号化されピアツーピアで直接送信されます。チャット履歴はこの端末のブラウザにのみ保存されます（ページを閉じると消去、アップロードされません）。',
+        clearDataTitle: 'このブラウザに保存された身元とすべてのローカルデータを削除し、初期状態に戻します',
+        clearDataBtn: 'ローカルデータを消去',
+        emptyConnected: '暗号化チャネルを確立しました — メッセージを送ってチャットを始めましょう。',
+        emptyDisconnected: '「🔗 ルーム作成」を押してリンクを相手に送るか、\n相手から届いたリンクを開くと、エンドツーエンド暗号化チャットを始められます。',
+        placeholderWaitingSecure: 'セキュアチャネルを待機中…',
+        placeholderConfirmSas: 'まず安全コードを照合し「一致」を押してください…',
+        joinRoomDialogTitle: '🔌 ルームに参加',
+        pasteRoomLink: '相手から届いたルームリンクを貼り付けてください：',
+        cancel: 'キャンセル',
+        join: '参加',
+        loadIdentityFailed: 'ローカル身元の読み込みに失敗しました。ページを更新して再試行してください。',
+        identityIncomplete: 'ローカル身元が不完全で暗号化チャネルを確立できません。身元をリセットして再試行してください。',
+        secureChannelFailed: '暗号化チャネルの確立に失敗しました。再試行してください。',
+        e2eEstablished: '🔐 エンドツーエンド暗号化チャネルを確立しました。下の安全コードを相手と照合してからチャットを始めてください。',
+        e2eEstablishing: '🔐 エンドツーエンド暗号化チャネルを確立中…',
+        peerVerifyFailed: '⛔ 相手の身元検証に失敗しました。中間者攻撃の可能性があります。切断しました。',
+        relayNotice: '🔒 中継サーバー経由で暗号化して相手に接続します。あなたの実IPは相手に公開されません。',
+        connectedEstablishing: '✅ 相手に接続しました。エンドツーエンド暗号化を確立中…',
+        connectFailed: '接続の確立に失敗しました。再試行してください。',
+        peerDisconnected: '相手との接続が切断されました。',
+        peerJoinedConnecting: '相手が参加しました。接続中…',
+        negotiationFailed: '接続交渉に失敗しました。再試行してください。',
+        negotiationError: '接続交渉でエラーが発生しました。再試行してください。',
+        peerLeft: '相手が退出しました。このセッションは終了しました。',
+        signalingError: '接続サービスでエラーが発生しました。しばらくして再試行してください。',
+        roomReadyWaiting: 'ルームの準備ができました。相手の参加を待機中…',
+        joinedConnecting: 'ルームに参加しました。相手に接続中…',
+        serverConnectFailed: 'サーバーに接続できません。ネットワークを確認して再試行してください。',
+        notSecureYet: 'セキュアチャネルが未確立のためメッセージを送信できません',
+        verifySasFirst: 'まず電話・対面で相手と安全コードを照合し一致を確認してからメッセージを送信してください',
+        disconnectedManual: '切断しました',
+        copiedToClipboard: 'クリップボードにコピーしました',
+        relayNotReady: '中継サーバーの準備ができておらず接続できない可能性があります。長時間つながらない場合はサイト管理者にお問い合わせください。',
+        sasMismatch: '安全コードが一致しません。中間者の疑いがあるため切断しました。',
+        nicknameUpdated: 'ニックネームを更新しました',
+        nicknameUpdateFailed: 'ニックネームの更新に失敗しました',
+        sasConfirmedToast: '安全コードの一致を確認しました。チャットを開始できます',
+        setNicknamePrompt: 'ニックネームを設定してください（相手に表示されます）：',
+        clearDataConfirm: 'この端末のすべてのローカルデータを消去しますか？\n\nこのブラウザに保存された暗号化身元とすべてのローカルデータを削除し、元に戻せません（サーバーには元々何も保存されていません）。消去後は「パスフレーズを設定」に戻って最初からやり直します。'
+      }
     }
   },
   
@@ -736,7 +1029,80 @@ export const translations: Record<string, Translations> = {
       joinFailed: 'Error al unirse a la conexión',
       sendFailed: 'Error al enviar el mensaje',
       idCopied: 'ID de conexión copiado al portapapeles',
-      send: 'Enviar'
+      send: 'Enviar',
+      p2p: {
+        headerTitle: '💬 Chat seguro P2P',
+        editNicknameTitle: 'Haz clic para cambiar tu apodo (visible para tu par)',
+        mePrefix: 'Yo: ',
+        unnamed: 'Sin nombre',
+        badgeVerifiedTitle: 'Los mensajes están cifrados de extremo a extremo y has verificado el código de seguridad fuera de banda: no hay intermediario',
+        badgeVerified: '🔒 Cifrado · Verificado',
+        badgeEncryptedTitle: 'Los mensajes están cifrados de extremo a extremo, pero el código de seguridad no se ha verificado fuera de banda, así que no se puede descartar un intermediario',
+        badgePendingSas: '🔒 Cifrado · Verifica el código de seguridad',
+        badgeHandshaking: '🔄 Asegurando la conexión…',
+        badgeFailed: '⛔ Verificación fallida',
+        aboutTitle: 'Acerca de / Privacidad y datos locales',
+        aboutToggle: 'ⓘ Acerca de',
+        sasDialogTitle: '🛡️ Verificar código de seguridad',
+        sasDialogBodyLine1: 'Léanse mutuamente los dígitos de abajo por un canal de confianza (teléfono / en persona).',
+        sasDialogBodyLine2: 'Solo si coinciden no hay intermediario: este es el paso más importante.',
+        peerPrefix: 'Par: ',
+        sasAgree: '✓ Coinciden, empezar a chatear',
+        sasDisagree: '✗ No coinciden, desconectar',
+        sasBarLabel: '🛡️ Código de seguridad',
+        sasVerifiedMark: '✓ Coincidencia verificada',
+        createRoomTitle: 'Crea una sala estrictamente uno a uno: una vez que entren 2 personas, cualquier otra con el enlace será rechazada por el servidor (Room full).',
+        createRoomBtn: '🔗 Crear sala',
+        oneToOneNote: '· Uno a uno (se bloquea tras 2)',
+        joinRoomBtn: '🔌 Unirse a la sala',
+        roomCreatedHeading: '🔗 Sala creada: envía el enlace a tu par; se une automáticamente cuando lo abre en un navegador',
+        establishingEncrypted: '🔄 Estableciendo conexión cifrada…',
+        waitingPeerJoin: '● Esperando a que el par se una…',
+        roomLinkWarning: '⚠️ El enlace contiene un token de sala de un solo uso; envíalo por un canal de confianza. Tras conectar, verifica el «código de seguridad» de abajo con tu par por teléfono / en persona antes de chatear: este es el paso clave para descartar un intermediario (incluido un servidor de señalización malicioso).',
+        copyLink: '📋 Copiar enlace',
+        collapse: 'Contraer',
+        aboutPrivacyTitle: 'Los mensajes están cifrados de extremo a extremo y se envían punto a punto; el servidor solo retransmite el emparejamiento y nunca maneja ni almacena ningún mensaje',
+        aboutPrivacyBody: '🔒 El servidor no guarda ningún historial de chat; los mensajes están cifrados de extremo a extremo y se envían punto a punto. El historial de chat solo vive en el navegador de este dispositivo (se borra al cerrar la página, nunca se sube).',
+        clearDataTitle: 'Elimina la identidad y todos los datos locales guardados en este navegador, volviendo al estado inicial',
+        clearDataBtn: 'Borrar datos locales',
+        emptyConnected: 'Canal cifrado establecido: envía un mensaje para empezar a chatear.',
+        emptyDisconnected: 'Haz clic en «🔗 Crear sala» para generar un enlace para tu par,\no abre un enlace que te hayan enviado, para iniciar un chat cifrado de extremo a extremo.',
+        placeholderWaitingSecure: 'Esperando el canal seguro…',
+        placeholderConfirmSas: 'Primero verifica el código de seguridad y pulsa «Coinciden»…',
+        joinRoomDialogTitle: '🔌 Unirse a la sala',
+        pasteRoomLink: 'Pega el enlace de sala que te envió tu par:',
+        cancel: 'Cancelar',
+        join: 'Unirse',
+        loadIdentityFailed: 'No se pudo leer la identidad local. Actualiza la página e inténtalo de nuevo.',
+        identityIncomplete: 'La identidad local está incompleta; no se puede establecer un canal cifrado. Restablece tu identidad e inténtalo de nuevo.',
+        secureChannelFailed: 'No se pudo establecer el canal cifrado. Inténtalo de nuevo.',
+        e2eEstablished: '🔐 Canal cifrado de extremo a extremo establecido. Verifica el código de seguridad de abajo con tu par antes de chatear.',
+        e2eEstablishing: '🔐 Estableciendo canal cifrado de extremo a extremo…',
+        peerVerifyFailed: '⛔ Falló la verificación de identidad del par: puede haber un intermediario. Desconectado.',
+        relayNotice: '🔒 Te conectarás a tu par cifrado a través de un servidor de retransmisión; tu IP real no se expone a tu par.',
+        connectedEstablishing: '✅ Conectado al par, estableciendo cifrado de extremo a extremo…',
+        connectFailed: 'No se pudo conectar. Inténtalo de nuevo.',
+        peerDisconnected: 'La conexión con tu par se ha cerrado.',
+        peerJoinedConnecting: 'El par se unió, conectando…',
+        negotiationFailed: 'Falló la negociación de la conexión. Inténtalo de nuevo.',
+        negotiationError: 'Error en la negociación de la conexión. Inténtalo de nuevo.',
+        peerLeft: 'Tu par salió; esta sesión ha terminado.',
+        signalingError: 'El servicio de conexión tuvo un error. Inténtalo más tarde.',
+        roomReadyWaiting: 'Sala lista, esperando a que el par se una…',
+        joinedConnecting: 'Te uniste a la sala, conectando con el par…',
+        serverConnectFailed: 'No se puede conectar al servidor. Revisa tu red e inténtalo de nuevo.',
+        notSecureYet: 'El canal seguro no está listo; no se pueden enviar mensajes',
+        verifySasFirst: 'Primero verifica el código de seguridad con tu par por teléfono / en persona y confirma que coincide, luego envía mensajes',
+        disconnectedManual: 'Desconectado',
+        copiedToClipboard: 'Copiado al portapapeles',
+        relayNotReady: 'El servidor de retransmisión no está listo y la conexión puede fallar. Si sigue sin estar disponible, contacta al administrador del sitio.',
+        sasMismatch: 'El código de seguridad no coincide: posible intermediario. Desconectado.',
+        nicknameUpdated: 'Apodo actualizado',
+        nicknameUpdateFailed: 'No se pudo actualizar el apodo',
+        sasConfirmedToast: 'Código de seguridad confirmado como coincidente: puedes empezar a chatear',
+        setNicknamePrompt: 'Configura tu apodo (visible para tu par):',
+        clearDataConfirm: '¿Borrar todos los datos locales de este dispositivo?\n\nEsto elimina la identidad cifrada y todos los datos locales guardados en este navegador, y no se puede deshacer (el servidor no almacena nada de todos modos). Después vuelves a «Establecer contraseña» y empiezas de nuevo.'
+      }
     }
   }
 };
