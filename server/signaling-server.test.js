@@ -156,6 +156,25 @@ describe('SignalingServer 安全加固', () => {
         expect(err.error).toMatch(/16-128 chars/);
     });
 
+    test('未配置 TURN 时 /turn-credentials 返回 200 + configured:false + 空 iceServers（不报 503，避免浏览器控制台噪音）', async () => {
+        const savedSecret = process.env.TURN_SECRET;
+        const savedHost = process.env.TURN_HOST;
+        delete process.env.TURN_SECRET;
+        delete process.env.TURN_HOST;
+        try {
+            const resp = await fetch(`http://localhost:${port}/turn-credentials`, {
+                headers: { origin: ORIGIN }
+            });
+            expect(resp.status).toBe(200);
+            const data = await resp.json();
+            expect(data.configured).toBe(false);
+            expect(data.iceServers).toEqual([]);
+        } finally {
+            if (savedSecret !== undefined) process.env.TURN_SECRET = savedSecret;
+            if (savedHost !== undefined) process.env.TURN_HOST = savedHost;
+        }
+    });
+
     describe('clientIp（反代后真实 IP 解析）', () => {
         const fakeReq = (xff, socketIp = '10.0.0.5') => ({
             headers: xff === undefined ? {} : { 'x-forwarded-for': xff },

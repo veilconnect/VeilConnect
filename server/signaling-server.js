@@ -217,8 +217,10 @@ class SignalingServer {
             const secret = process.env.TURN_SECRET;
             const host = process.env.TURN_HOST;
             if (!secret || !host) {
-                // 未配置：返回 503，客户端会优雅跳过（不静默降级）
-                return res.status(503).json({ error: 'TURN not configured' });
+                // 未配置 TURN 属预期状态（如本地联调），返回 200 + 空 iceServers + configured:false，
+                // 而非 503——避免浏览器控制台出现红色网络错误噪音。客户端据此不添加任何 TURN，
+                // 由前端安全守卫照常告警（仍不静默降级，relayOnly 仍默认开启）。
+                return res.json({ iceServers: [], configured: false });
             }
             const ttl = parseInt(process.env.TURN_TTL || '3600', 10);
             const port = process.env.TURN_PORT || '3478';

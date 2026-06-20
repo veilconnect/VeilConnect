@@ -50,8 +50,9 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
       const savedIdentity = await (window as any).electronAPI.identity.getCurrentIdentity();
       
       if (savedIdentity) {
-        setUserIdentity(savedIdentity);
-        console.log('✅ 加载已保存的身份:', savedIdentity.publicId);
+        const identity = toUserIdentity(savedIdentity);
+        setUserIdentity(identity);
+        console.log('✅ 加载已保存的身份:', identity.publicId);
       } else {
         console.log('📝 未找到保存的身份，需要生成新身份');
       }
@@ -91,6 +92,18 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
     const platform = 'desktop';
     return `${timestamp}_${random}_${platform}`;
   };
+
+  // 将主进程/worker 返回的身份（使用 userId）映射为渲染端兼容结构（使用 publicId）。
+  // 私钥始终保留在主进程，渲染端不持有；sessionId 为渲染端本地生成。
+  const toUserIdentity = (saved: any): UserIdentity => ({
+    publicKey: saved.publicKey,
+    privateKey: '', // 私钥保留在主进程，渲染端不持有
+    nickname: saved.nickname,
+    avatar: saved.avatar || '👤',
+    publicId: saved.userId ?? saved.publicId,
+    createdAt: saved.createdAt,
+    sessionId: generateSessionId()
+  });
 
   // 生成身份
   const generateIdentity = async () => {
@@ -136,16 +149,8 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
       
       // 使用Electron返回的身份信息（包含正确的密钥格式）
       if (savedIdentity) {
-        // 合并我们生成的信息和Electron返回的信息
-        const mergedIdentity: UserIdentity = {
-          publicKey: savedIdentity.publicKey,
-          privateKey: '', // 私钥保留在主进程，渲染端不持有
-          nickname: savedIdentity.nickname,
-          avatar: identity.avatar,
-          publicId: savedIdentity.userId, // Electron使用userId，我们使用publicId
-          createdAt: savedIdentity.createdAt,
-          sessionId: identity.sessionId
-        };
+        // 通过统一映射把 Electron 返回的身份（userId）转换为渲染端结构（publicId）
+        const mergedIdentity = toUserIdentity(savedIdentity);
                  setUserIdentity(mergedIdentity);
          console.log('✅ 身份生成并保存完成, ID:', mergedIdentity.publicId);
        } else {
