@@ -16,7 +16,7 @@
 #       → 用本机 LAN IP + Caddy 内置 CA 自签证书（免域名/免备案）。
 #         浏览器首次访问点「信任/继续」即可。默认走 8080/8443 端口，避开既有 80/443 服务。
 #
-# 可选环境变量：EXTERNAL_IP、TURN_SECRET、HTTP_PORT、HTTPS_PORT
+# 可选环境变量：EXTERNAL_IP、BIND_IP、TURN_SECRET、HTTP_PORT、HTTPS_PORT、TURN_TRANSPORT
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -29,6 +29,22 @@ die()     { c_red "✖ $1"; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "请用 root 运行：sudo bash scripts/install.sh"
 [ -f "$ROOT/docker-compose.yml" ] || die "未在仓库根目录找到 docker-compose.yml，请在 clone 出的目录内运行。"
+
+env_get() {
+  local key="$1"
+  [ -f "$ROOT/.env" ] || return 0
+  grep "^${key}=" "$ROOT/.env" | head -1 | cut -d= -f2- || true
+}
+
+env_default() {
+  local key="$1"
+  local current="${!key:-}"
+  if [ -n "$current" ]; then
+    printf '%s' "$current"
+  else
+    env_get "$key"
+  fi
+}
 
 # --- 1. Docker ---
 if ! command -v docker >/dev/null 2>&1; then
@@ -58,9 +74,18 @@ c_green "✓ Docker 就绪（compose: $COMPOSE）"
 # --- 3. 解析部署模式与域名 ---
 ARG="${1:-${DOMAIN:-}}"
 MODE=""           # public | local
-CADDYFILE="./Caddyfile"
-HTTP_PORT="${HTTP_PORT:-80}"
-HTTPS_PORT="${HTTPS_PORT:-443}"
+CADDYFILE="$(env_default CADDYFILE)"; CADDYFILE="${CADDYFILE:-./Caddyfile}"
+HTTP_PORT="$(env_default HTTP_PORT)"; HTTP_PORT="${HTTP_PORT:-80}"
+HTTPS_PORT="$(env_default HTTPS_PORT)"; HTTPS_PORT="${HTTPS_PORT:-443}"
+BIND_IP="$(env_default BIND_IP)"
+EXTERNAL_IP="$(env_default EXTERNAL_IP)"
+TURN_TRANSPORT="$(env_default TURN_TRANSPORT)"; TURN_TRANSPORT="${TURN_TRANSPORT:-both}"
+
+if [ -z "$ARG" ] && [ "$CADDYFILE" = "./Caddyfile.local" ]; then
+  ARG="--local"
+elif [ -z "$ARG" ]; then
+  ARG="$(env_get DOMAIN)"
+fi
 
 lan_ip() { ip -4 addr show scope global 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}' | grep -v '^127\.' | head -1; }
 pub_ip() {
@@ -75,14 +100,17 @@ if [ "$ARG" = "--local" ] || [ "$ARG" = "local" ]; then
   EXTERNAL_IP="${EXTERNAL_IP:-$(lan_ip)}"
   [ -n "$EXTERNAL_IP" ] || die "无法探测本机 LAN IP，请用 EXTERNAL_IP=x.x.x.x 重试。"
   DOMAIN="$EXTERNAL_IP"
+  BIND_IP="${BIND_IP:-$EXTERNAL_IP}"
   CADDYFILE="./Caddyfile.local"
   # 自签模式默认避开既有 80/443
   HTTP_PORT="${HTTP_PORT:-8080}"; [ "$HTTP_PORT" = "80" ] && HTTP_PORT=8080
   HTTPS_PORT="${HTTPS_PORT:-8443}"; [ "$HTTPS_PORT" = "443" ] && HTTPS_PORT=8443
 else
   MODE="public"
+  CADDYFILE="./Caddyfile"
   EXTERNAL_IP="${EXTERNAL_IP:-$(pub_ip)}"
   [ -n "$EXTERNAL_IP" ] || die "无法探测公网 IP。局域网/无公网请改用：sudo bash scripts/install.sh --local"
+  BIND_IP="${BIND_IP:-0.0.0.0}"
   if [ -n "$ARG" ]; then
     DOMAIN="$ARG"                       # ① 显式域名
   else
@@ -93,23 +121,25 @@ fi
 
 # 浏览器实际 Origin（含非标准端口）；用于信令服务器 Origin 白名单
 if [ "$HTTPS_PORT" = "443" ]; then PUBLIC_ORIGIN="https://$DOMAIN"; else PUBLIC_ORIGIN="https://$DOMAIN:$HTTPS_PORT"; fi
-c_green "✓ 模式：$MODE · 域名/地址：$DOMAIN · 端口：${HTTP_PORT}/${HTTPS_PORT} · 公网IP：$EXTERNAL_IP"
+c_green "✓ 模式：$MODE · 域名/地址：$DOMAIN · 端口：${HTTP_PORT}/${HTTPS_PORT} · 监听：$BIND_IP · 出口IP：$EXTERNAL_IP"
 
 # --- 4. 生成 / 复用 .env（幂等：保留已有 TURN_SECRET） ---
-if [ -f "$ROOT/.env" ] && grep -q '^TURN_SECRET=' "$ROOT/.env"; then
-  TURN_SECRET="$(grep '^TURN_SECRET=' "$ROOT/.env" | head -1 | cut -d= -f2-)"
+TURN_SECRET="$(env_default TURN_SECRET)"
+if [ -n "$TURN_SECRET" ]; then
   c_blue "→ 复用已有 .env 中的 TURN_SECRET"
 else
-  TURN_SECRET="${TURN_SECRET:-$(openssl rand -hex 32)}"
+  TURN_SECRET="$(openssl rand -hex 32)"
 fi
 cat > "$ROOT/.env" <<EOF
 DOMAIN=$DOMAIN
 EXTERNAL_IP=$EXTERNAL_IP
+BIND_IP=$BIND_IP
 TURN_SECRET=$TURN_SECRET
 HTTP_PORT=$HTTP_PORT
 HTTPS_PORT=$HTTPS_PORT
 CADDYFILE=$CADDYFILE
 PUBLIC_ORIGIN=$PUBLIC_ORIGIN
+TURN_TRANSPORT=$TURN_TRANSPORT
 EOF
 c_green "✓ 已写入 .env"
 

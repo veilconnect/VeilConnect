@@ -53,8 +53,9 @@ services:
     ports:
       # 容器内外端口一致，使 Caddy 站点端口与浏览器访问端口匹配（local 自定义端口必需）。
       # 公网模式固定 80/443（Let's Encrypt ACME 要求）；local 自签模式可用 8080/8443 等。
-      - "${HTTP_PORT:-80}:${HTTP_PORT:-80}"
-      - "${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"
+      # BIND_IP 默认为 0.0.0.0；local/wg 部署可设为目标内网 IP，避免在所有网卡上监听。
+      - "${BIND_IP:-0.0.0.0}:${HTTP_PORT:-80}:${HTTP_PORT:-80}"
+      - "${BIND_IP:-0.0.0.0}:${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"
     environment:
       DOMAIN: "${DOMAIN}"
       HTTP_PORT: "${HTTP_PORT:-80}"
