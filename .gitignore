@@ -16,6 +16,8 @@ coverage/
 *.log
 .DS_Store
 Thumbs.db
+.playwright-cli/
+.playwright-mcp/
 
 # 本地环境
 .env
