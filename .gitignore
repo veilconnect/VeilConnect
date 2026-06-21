@@ -26,3 +26,6 @@ Thumbs.db
 
 # 本机专用手动测试脚本（写死 LAN IP/口令，不入库）
 web-host11.mjs
+
+# 本地 TLS 测试证书（勿入库）
+.certs/

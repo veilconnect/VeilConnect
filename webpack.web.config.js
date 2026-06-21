@@ -18,9 +18,11 @@ module.exports = (env, argv) => {
     target: 'web',
     entry: './src/web/index.tsx',
     output: {
-      path: path.resolve(__dirname, 'server/public'),
+      // 默认输出网页栈的 server/public；桌面端构建用 --env outDir=dist/renderer 改输出目录。
+      path: path.resolve(__dirname, (env && env.outDir) || 'server/public'),
       filename: isDev ? '[name].js' : '[name].[contenthash].js',
-      publicPath: '/',
+      // 桌面端用 file:// 加载，publicPath 必须相对（'/' 会指向文件系统根而 404）。
+      publicPath: (env && env.outDir) ? './' : '/',
       clean: true
     },
     resolve: {
