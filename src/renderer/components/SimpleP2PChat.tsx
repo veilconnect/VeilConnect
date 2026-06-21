@@ -70,6 +70,22 @@ interface ReceivingFile {
 const FILE_BACKPRESSURE_HIGH = 1024 * 1024;
 const FILE_BACKPRESSURE_LOW = 256 * 1024;
 
+function displayNickname(nickname: string | undefined | null): string {
+  const name = (nickname || '').trim();
+  if (!name) return '';
+  if (name === 'Guest User' || name === '匿名用户' || name === '未知用户') return '';
+  if (/^User_[a-z0-9]+_[a-z0-9]+$/i.test(name)) return '';
+  return name;
+}
+
+function formatIdentityLabel(prefix: string, nickname: string | undefined | null, userId: string | undefined | null): string {
+  const name = displayNickname(nickname);
+  const id = (userId || '').trim();
+  if (name && id) return `${prefix}${name} · ${id}`;
+  if (name) return `${prefix}${name}`;
+  return `${prefix}${id}`;
+}
+
 function randomTransferId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
@@ -345,7 +361,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
 
   // 修改本机昵称（对端在握手后会看到它）
   const renameSelf = useCallback(async () => {
-    const next = (window.prompt(t.chat.p2p.setNicknamePrompt, myName || '') || '').trim();
+    const next = (window.prompt(t.chat.p2p.setNicknamePrompt, displayNickname(myName)) || '').trim();
     if (!next || next === myName) return;
     try {
       await (window as any).electronAPI?.identity?.updateUserInfo?.({ nickname: next });
@@ -1151,6 +1167,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
 
   const canSendContent = connectionStatus === 'connected' && secureStatus === 'secure' && sasConfirmed;
   const fileTransferBusy = fileTransfers.some(item => item.status === 'sending' || item.status === 'receiving');
+  const myUserId = selfIdentityRef.current?.userId || userIdentity?.customId || '';
+  const myIdentityLabel = formatIdentityLabel(t.chat.p2p.mePrefix, myName, myUserId);
 
   const styles = {
     container: {
@@ -1395,11 +1413,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
           <h3 style={{ margin: 0 }}>{t.chat.p2p.headerTitle}</h3>
           <span
-            style={{ fontSize: 12, opacity: 0.9, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            style={{ fontSize: 12, opacity: 0.9, cursor: 'pointer', overflowWrap: 'anywhere' }}
             onClick={renameSelf}
             title={t.chat.p2p.editNicknameTitle}
           >
-            {t.chat.p2p.mePrefix}{myName || t.chat.p2p.unnamed}{userIdentity?.customId ? ` · ${userIdentity.customId.slice(0, 8)}…` : ''} ✎
+            {myIdentityLabel} ✎
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1445,8 +1463,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
               {safetyCode}
             </div>
             {peerInfo && (
-              <p style={{ color: '#888', fontSize: 12, margin: '12px 0 18px' }}>
-                {t.chat.p2p.peerPrefix}{peerInfo.nickname}（{peerInfo.userId.slice(0, 12)}…）
+              <p style={{ color: '#888', fontSize: 12, margin: '12px 0 18px', overflowWrap: 'anywhere' }}>
+                {formatIdentityLabel(t.chat.p2p.peerPrefix, peerInfo.nickname, peerInfo.userId)}
               </p>
             )}
             <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
@@ -1471,7 +1489,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       {secureStatus === 'secure' && safetyCode && sasConfirmed && (
         <div style={styles.safetyBar}>
           <span>{t.chat.p2p.sasBarLabel} <strong style={{ fontFamily: 'monospace', letterSpacing: 1 }}>{safetyCode}</strong></span>
-          {peerInfo && <span style={{ color: '#666' }}>{t.chat.p2p.peerPrefix}{peerInfo.nickname} ({peerInfo.userId.slice(0, 12)}…)</span>}
+          {peerInfo && <span style={{ color: '#666', overflowWrap: 'anywhere' }}>{formatIdentityLabel(t.chat.p2p.peerPrefix, peerInfo.nickname, peerInfo.userId)}</span>}
           <span style={{ color: '#27ae60', fontWeight: 600 }}>{t.chat.p2p.sasVerifiedMark}</span>
         </div>
       )}
