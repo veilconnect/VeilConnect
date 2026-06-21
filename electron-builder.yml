@@ -1,0 +1,53 @@
+# VeilConnect 桌面端打包 + 代码签名配置（electron-builder）。
+#
+# 这是把"根信任从服务器挪回客户端"的最后一环：分发的是【签名】安装包，用户/OS 可校验签名，
+# 篡改即失效；配合可复现构建（见 docs/DESKTOP_BUILD.md），任何人能从源码构出同一字节产物并比对。
+#
+# 签名所需机密只来自 CI 环境变量/密钥库，绝不入库：
+#   macOS: CSC_LINK(.p12 base64) + CSC_KEY_PASSWORD；公证 APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+#   Windows: CSC_LINK + CSC_KEY_PASSWORD（或 Azure Trusted Signing）
+appId: org.veilconnect.desktop
+productName: VeilConnect
+copyright: © 2025 VeilConnect Team
+
+directories:
+  output: release
+  buildResources: build
+
+# 只打包必要产物：编译后的主进程/preload + 构建好的渲染端 SPA。
+# main.js 位于 dist/electron/，按 path.join(__dirname,'..','renderer') 找到 dist/renderer/index.html。
+files:
+  - dist/electron/**/*
+  - dist/renderer/**/*
+  - package.json
+
+# 可复现性：关闭随构建变化的产物，便于多机字节级比对。
+removePackageScripts: true
+npmRebuild: false
+
+asar: true
+
+mac:
+  category: public.app-category.social-networking
+  hardenedRuntime: true       # 公证前提
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true              # 需 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+  target:
+    - dmg
+    - zip
+
+win:
+  target:
+    - nsis
+  # 证书来自 CSC_LINK/CSC_KEY_PASSWORD 环境变量（不入库）
+
+linux:
+  category: Network
+  target:
+    - AppImage
+    - deb
+
+# 自动更新（可选）：发布到自有/对象存储，更新包同样校验签名。
+publish: null

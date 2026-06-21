@@ -12,7 +12,10 @@ import { installElectronAPI, isKeyStoreInitialized, unlock, resetKeyStore } from
 
 installElectronAPI();
 
-const MIN_PASSPHRASE_LEN = 8;
+const MIN_PASSPHRASE_LEN = 12; // 对齐加密导出口令下限（IdentityManager.MIN_EXPORT_PASSWORD_LEN）
+
+// 桌面端（Electron preload 注入了 keystore）由 OS 钥匙串自动解锁，跳过口令门禁。
+const isDesktop = typeof window !== 'undefined' && !!(window as any).electronAPI?.keystore;
 
 const UnlockGate: React.FC = () => {
   const [initialized, setInitialized] = useState<boolean | null>(null);
@@ -24,6 +27,7 @@ const UnlockGate: React.FC = () => {
   const [showPw, setShowPw] = useState(false);
 
   useEffect(() => {
+    if (isDesktop) return; // 桌面端不走口令门禁，避免无谓启动网页 Worker
     isKeyStoreInitialized()
       .then(setInitialized)
       .catch(() => setInitialized(false));
@@ -66,7 +70,7 @@ const UnlockGate: React.FC = () => {
     }
   };
 
-  if (unlocked) return <VeilConnectApp />;
+  if (isDesktop || unlocked) return <VeilConnectApp />;
 
   return (
     <div
