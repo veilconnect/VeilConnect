@@ -146,14 +146,18 @@ npm test
 - Windows：DPAPI
 - Linux：libsecret / kwallet
 
-`safeStorage` 不可用时降级为 `fs.writeFile` mode 0600。
+> **更新（fail-closed）**：当前桌面端 `src/main/electron/secureKeyStore.ts` **不再降级为明文**。
+> `safeStorage` 不可用时**拒绝写盘**（抛错）；Linux 上若后端退化为 `basic_text`（硬编码密钥≈明文）
+> 主进程亦**拒绝启动**。仅在【未打包】的开发/测试且显式 `VEIL_ALLOW_PLAINTEXT_KEYRING=1` 时才允许
+> 带审计标记的明文落盘——发布版恒禁用。详见 `docs/DESKTOP_BUILD.md`。
 
 ---
 
 ## 设计上的剩余风险
 
-1. **导出时的最小密码长度仅 4 字符**：阻挡误操作，不阻挡弱密码。生产用户应自觉使用强密码。
-2. **PBKDF2 100k 轮在现代硬件下约 100ms 级**：比 Argon2 抗 GPU 弱，但避免引入原生模块依赖。后续可考虑切到 Argon2id。
+1. **导出口令最小长度 12 字符**（`MIN_EXPORT_PASSWORD_LEN`，本文旧值 4 已废弃）：阻挡弱口令误用。
+2. **PBKDF2-SHA256 600,000 轮**（本文旧值 100k 已废弃，对齐 OWASP）：比 Argon2 抗 GPU 弱，但避免引入原生模块依赖。Argon2id 列为路线项（见 `docs/security/CRYPTO_RATIONALE.md`）。
+   **恶意渲染端导出风险**：`exportIdentityEncrypted(password)` 用渲染端传入的口令加密含私钥的身份后返回——被 XSS/供应链污染的渲染端可借此导出私钥。缓解路线：对导出/清库/换身份等敏感操作要求本地用户确认或 OS 认证（待实现）。
 3. **本地 store 加密 key 派生自固定字符串**：`SecureKeyStore.getKey` 第一次启动会随机生成并持久化；该 key 本身受 `safeStorage` 保护。如果攻击者已能读取用户的 `userData` 目录且 `safeStorage` 不可用，加密形同虚设——这与所有桌面端本地存储面临的「本地威胁模型」一致。
 4. **TOFU**：导入对端身份时按 first-seen 信任。后续应支持安全字带（safety number）人工核验，或 sigchain。
 

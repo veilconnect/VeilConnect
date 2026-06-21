@@ -27,6 +27,8 @@ services:
       TURN_TTL: "3600"
       # 中继传输：both(默认)|tcp|udp。wg/隧道环境设 tcp 更稳（避免 UDP MTU/分片导致 DTLS 握手失败）。
       TURN_TRANSPORT: "${TURN_TRANSPORT:-both}"
+      # 信令详细日志默认关闭（隐私默认：不落客户端 IP/clientId/roomId）。排障可设 1。
+      SIGNAL_VERBOSE: "${SIGNAL_VERBOSE:-0}"
     expose:
       - "3001"
 

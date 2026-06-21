@@ -35,7 +35,12 @@ veilconnect/
 │   │   ├── identity/                  # 身份、ID 派生、密钥绑定、AES-GCM 导出
 │   │   ├── database/                  # 简化 KV（联系人 + 消息）
 │   │   ├── storage/                   # MessageHistoryManager（带过期）
-│   │   └── presence/                  # 在线状态广播
+│   │   ├── presence/                  # 在线状态广播
+│   │   └── electron/                  # 桌面客户端：硬化主进程 + preload + OS 钥匙串密钥库
+│   │       ├── main.ts                # 只加载本地代码、拒绝远程导航、注册 IPC
+│   │       ├── preload.ts             # contextBridge 暴露 window.electronAPI（同 web 形状）
+│   │       ├── ipcHandlers.ts         # channel→Manager（与 crypto-worker 逐条一致）
+│   │       └── secureKeyStore.ts      # safeStorage(OS 钥匙串)保护的 per-store 密钥库
 │   ├── web/                           # 纯网页适配层（替代 Electron 主进程/preload）
 │   │   ├── index.tsx                  # 入口：口令解锁门禁 → VeilConnectApp
 │   │   ├── worker/crypto-worker.ts    # 加密 Web Worker（私钥只在此，channel 路由）
@@ -51,7 +56,7 @@ veilconnect/
 ├── server/signaling-server.js         # 信令服务器（房间 + /turn-credentials + 托管 SPA）
 ├── webpack.web.config.js              # 网页 SPA + Worker 打包（输出 server/public）
 ├── Dockerfile · docker-compose.yml · Caddyfile · .env.example   # 一键自部署栈
-├── tests/                             # Jest 单元测试（95 cases）
+├── tests/                             # Jest 单元测试（134 cases）
 └── jest.config.js
 ```
 
@@ -97,7 +102,7 @@ sudo bash /opt/veilconnect/scripts/uninstall.sh
 ```bash
 npm install               # 装依赖
 npm run typecheck         # tsc --noEmit
-npm test                  # 跑 95 个单元测试
+npm test                  # 跑 134 个单元测试
 npm run build:web         # 打包 SPA + Worker 到 server/public
 npm run dev:web           # webpack dev server（热重载，8080）
 ```
@@ -169,14 +174,22 @@ cipher = AES-256-GCM(JSON.stringify(identity), key, iv)
 
 输出 JSON：`{ version, encrypted: true, salt, iv, authTag, ciphertext }`，全部 base64。导入时 GCM authTag 失败即抛错（错误密码 / 篡改）。
 
+### 完整性与可验证性（缩小浏览器 E2EE 信任边界）
+
+- **子资源完整性（SRI）**：`npm run build:web` 后自动给下发脚本注入 `integrity="sha384-…"` 并生成 `server/public/sri-manifest.json`；浏览器拒绝执行哈希不符的脚本。CI 用 `npm run sri:check` 强制校验。
+- **可复现构建**：`npm ci` + 精确钉死的密码学依赖，可字节级复现并比对官方哈希。详见 [`docs/REPRODUCIBLE_BUILD.md`](docs/REPRODUCIBLE_BUILD.md)。
+- **威胁模型（STRIDE）**：逐角色/逐类别列出能与不能，并指向对应测试断言。详见 [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md)、[`docs/security/CRYPTO_RATIONALE.md`](docs/security/CRYPTO_RATIONALE.md)。
+- **信令隐私默认**：信令服务器默认**不记录**任何元数据（IP/clientId/roomId）；排障才设 `SIGNAL_VERBOSE=1`。
+- **CI 门禁**：`.github/workflows/ci.yml` 跑 typecheck + ESLint + 134 测试 + 构建 + SRI 校验 + 服务端测试 + 生产依赖审计。
+
 ---
 
 ## 测试
 
 ```
 $ npm test
-Test Suites: 9 passed, 9 total
-Tests:       95 passed, 95 total
+Test Suites: 13 passed, 13 total
+Tests:       134 passed, 134 total
 
 File                       | % Stmts | % Branch | % Funcs | % Lines
 All files                  |   86.26 |    62.13 |   87.15 |   88.32
@@ -237,10 +250,10 @@ React UI ──调用──► window.electronAPI.<域>.<方法>
 
 ## 限制 / 已知问题
 
-- **根信任在「下发网页的服务器」**：与可独立审计、签名分发的桌面/移动客户端不同，网页版的 HTML/JS 每次都由部署者的服务器现场下发。**一个恶意或被攻陷的部署者可以下发被植入的脚本，窃取用户口令与私钥**——E2EE 数学再正确也挡不住「客户端代码本身被换掉」。因此请只使用你信任的部署、优先自建；高威胁场景应核对资源完整性（SRI/固定版本）或改用桌面客户端。这是浏览器端 E2EE 的固有信任边界，务必让用户知情。
+- **根信任在「下发网页的服务器」（网页版固有；桌面客户端可消除）**：网页版的 HTML/JS 每次都由部署者的服务器现场下发。**一个恶意或被攻陷的部署者可以下发被植入的脚本，窃取用户口令与私钥**。网页端用 SRI（构建注入 + `sri-manifest.json` 比对）让篡改*可检测*，但无法根除。**要彻底消除**这一信任边界，改用本仓库的**桌面客户端**（`src/main/electron/`，只加载随签名安装包分发的本地代码、OS 钥匙串保护私钥），见 [`docs/DESKTOP_BUILD.md`](docs/DESKTOP_BUILD.md)。
 - **必须 HTTPS**：浏览器 WebCrypto/WebRTC 需安全上下文，自部署栈用 Caddy 自动 HTTPS 满足；localhost 联调豁免。
-- **浏览器密钥保护弱于桌面版**：无 OS keychain，私钥靠用户口令加密落 IndexedDB；Web Worker 仅软隔离。忘记口令需用加密导出的身份文件在新设备恢复。
-- **聊天本身无消息持久化**：`SimpleP2PChat` 关闭即丢历史。`MessageHistoryManager` 已实现但还没接 UI。
+- **浏览器密钥保护弱于桌面版**：网页版无 OS keychain，私钥靠用户口令加密落 IndexedDB、Web Worker 仅软隔离；**桌面版**改用 OS 钥匙串（`safeStorage`，安全失败拒绝明文）+ 主/渲染进程硬隔离。
+- **消息持久化默认关闭（隐私默认，可选开启）**：默认「关页即焚」。设 `localStorage.vc.persist='1'` 后，文本消息按对端 userId 分会话经加密 Web Worker 内 `MessageHistoryManager`（per-store 密钥 AES 加密落 IndexedDB）保存，重连自动载入。注：该接线已实现并通过类型检查，但尚无自动化浏览器端到端测试覆盖，建议自行联调确认。
 - **TURN 凭据**：自托管 coturn 默认经 `/turn-credentials` 开箱签发；本地无 TURN 时设 `vc.relayOnly='0'`（会暴露真实 IP，仅联调用）。
 - **非抗审查工具**：内容端到端加密，但无流量混淆 / DPI 抗性，元数据（连接发生、IP）仍可能暴露给中继方。高威胁场景请额外叠加 VPN/Tor。
 - **不支持多对话**：`SimpleP2PChat` 只能维护一个活动连接。

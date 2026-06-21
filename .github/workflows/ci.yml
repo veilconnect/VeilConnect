@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env:
+      # 只需 electron 类型做 typecheck:electron，无需下载 ~150MB 二进制。
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install (web)
+        run: npm ci
+
+      - name: Typecheck (web)
+        run: npm run typecheck
+
+      - name: Typecheck (electron main/preload)
+        run: npm run typecheck:electron
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build web bundle
+        run: npm run build:web
+
+      - name: Verify SRI manifest is current
+        run: npm run sri:check
+
+  signaling-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install (server)
+        run: npm ci
+      - name: Syntax check
+        run: npm run syntax
+      - name: Server tests
+        run: npm test
+      - name: Audit production deps (fail on high+)
+        run: npm audit --omit=dev --audit-level=high
