@@ -40,6 +40,15 @@ export const PAIRING_CODE_BYTES = 16;
  */
 export const PAIRING_PBKDF2_ITERATIONS = 200_000;
 
+/**
+ * 配对码最小长度（= 生成长度 26）。短于此即视为低熵弱码并拒绝，
+ * 防止本模块被误当「用户口令」API 复用（弱口令场景需 PAKE，非本方案）。
+ */
+export const MIN_PAIRING_CODE_LENGTH = 26;
+
+/** 一次性 nonce 字节数（绑定进 transcript 以防旧 proof 重放）。 */
+export const PAIRING_NONCE_BYTES = 16;
+
 /** 去歧义 Base32 字母表（Crockford 风格，去掉 I L O U）。 */
 const BASE32_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
@@ -87,6 +96,16 @@ export function groupPairingCode(code: string): string {
   return normalizePairingCode(code).replace(/(.{4})(?=.)/g, '$1-');
 }
 
+/** 生成一次性 nonce（base64）。每端每会话各生成一个，经 hello 交换并纳入 transcript，防旧 proof 重放。 */
+export function generateNonce(): string {
+  return bytesToBase64(crypto.getRandomValues(new Uint8Array(PAIRING_NONCE_BYTES)));
+}
+
+/** 配对码是否达到高熵长度要求（归一化后 ≥ MIN_PAIRING_CODE_LENGTH）。供 UI 与本模块拒绝弱码。 */
+export function isValidPairingCode(code: string): boolean {
+  return normalizePairingCode(code).length >= MIN_PAIRING_CODE_LENGTH;
+}
+
 /**
  * 归一化用户输入：转大写、去除非字母数字分隔符、纠正常见易混字符（I/L→1, O→0, U→V），
  * 仅保留字母表内字符。幂等。用户抄错会在比对阶段失败（重输即可），这里只做无歧义的规整。
@@ -126,7 +145,7 @@ export async function derivePairingKey(code: string): Promise<CryptoKey> {
   );
 }
 
-/** 单方在握手中观测到的三元组（均为 base64 公钥）。 */
+/** 单方在握手中观测到的密钥与一次性 nonce（公钥均为 base64）。 */
 export interface PartyKeys {
   /** Ed25519 长期身份公钥 */
   identityKey: string;
@@ -134,6 +153,8 @@ export interface PartyKeys {
   boxKey: string;
   /** Double Ratchet 身份公钥 */
   ratchetKey: string;
+  /** 本端本会话一次性 nonce（base64），防旧 proof 重放 */
+  nonce: string;
 }
 
 export interface TranscriptResult {
@@ -146,8 +167,8 @@ export interface TranscriptResult {
 }
 
 function partyTuple(p: PartyKeys): string {
-  // base64 公钥不含 SEP（'|'），故拼接无歧义；三个公钥绑在同一元组内防中间人跨元组拆换。
-  return `${p.identityKey}${SEP}${p.boxKey}${SEP}${p.ratchetKey}`;
+  // base64 不含 SEP（'|'），故拼接无歧义；身份+box+棘轮+nonce 绑在同一元组内防中间人跨元组拆换、防重放。
+  return `${p.identityKey}${SEP}${p.boxKey}${SEP}${p.ratchetKey}${SEP}${p.nonce}`;
 }
 
 /**
@@ -179,6 +200,15 @@ export async function commitProof(proof: string): Promise<string> {
   return bytesToBase64(new Uint8Array(digest));
 }
 
+/**
+ * 内容门禁的唯一真值来源：配对模式（pairRequired）只认 pairVerified；
+ * 否则认手动核对的 SAS（sasConfirmed）。任一路径未达成即不放行（fail-closed）。
+ * 抽成纯函数以便单测，避免门禁逻辑在多处各写一份导致两条路径互相绕过。
+ */
+export function contentGateOpen(pairRequired: boolean, pairVerified: boolean, sasConfirmed: boolean): boolean {
+  return pairRequired ? pairVerified : sasConfirmed;
+}
+
 /** 常量时间字符串比较（避免计时侧信道）。长度不等直接 false。 */
 export function constantTimeEqual(a: string, b: string): boolean {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
@@ -202,6 +232,9 @@ export interface PairingMaterials {
 }
 
 export async function preparePairing(code: string, self: PartyKeys, peer: PartyKeys): Promise<PairingMaterials> {
+  if (!isValidPairingCode(code)) {
+    throw new Error(`Pairing code too short (min ${MIN_PAIRING_CODE_LENGTH} chars)`);
+  }
   const key = await derivePairingKey(code);
   const { transcript, selfRole, peerRole } = buildTranscript(self, peer);
   const myProof = await computeProof(key, transcript, selfRole);

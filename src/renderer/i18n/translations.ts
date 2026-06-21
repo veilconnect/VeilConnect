@@ -240,6 +240,8 @@ export interface Translations {
       pairBarLabel: string;
       pairFailed: string;
       pairMissingCode: string;
+      pairTimedOut: string;
+      pairJoinOptional: string;
       // —— 文件 / 图片传输 ——
       file: {
         attachTitle: string;
@@ -493,7 +495,9 @@ export const translations: Record<string, Translations> = {
         pairVerifiedMark: '✓ 配对码已验证（自动抗中间人）',
         pairBarLabel: '配对码验证：',
         pairFailed: '配对码不匹配或存在中间人，已断开',
-        pairMissingCode: '请先输入配对码再继续',
+        pairMissingCode: '请输入完整配对码（系统生成的那串）再继续',
+        pairTimedOut: '配对码验证超时，已断开（请确认双方用的是同一个码）',
+        pairJoinOptional: '配对码（可选；对方启用时填写，将自动验证免去手动核对安全码）',
         file: {
           attachTitle: '发送文件或图片',
           busy: '已有文件正在发送，请等当前文件传完再发下一个',
@@ -745,7 +749,9 @@ export const translations: Record<string, Translations> = {
         pairVerifiedMark: '✓ Pairing code verified (auto anti-MITM)',
         pairBarLabel: 'Pairing code:',
         pairFailed: 'Pairing code mismatch or man-in-the-middle — disconnected',
-        pairMissingCode: 'Enter the pairing code first',
+        pairMissingCode: 'Enter the full pairing code (the system-generated one) first',
+        pairTimedOut: 'Pairing verification timed out — disconnected (check both sides use the same code)',
+        pairJoinOptional: 'Pairing code (optional; fill in if your peer enabled it — auto-verifies, no manual safety-code check)',
         file: {
           attachTitle: 'Send a file or photo',
           busy: 'A file is already being sent — wait for it to finish before sending another',
@@ -997,7 +1003,9 @@ export const translations: Record<string, Translations> = {
         pairVerifiedMark: '✓ ペアリングコード検証済み（中間者を自動排除）',
         pairBarLabel: 'ペアリングコード検証：',
         pairFailed: 'ペアリングコードが一致しないか中間者の疑い。切断しました。',
-        pairMissingCode: '先にペアリングコードを入力してください',
+        pairMissingCode: '完全なペアリングコード（システム生成のもの）を入力してください',
+        pairTimedOut: 'ペアリング検証がタイムアウトしたため切断しました（双方が同じコードか確認してください）',
+        pairJoinOptional: 'ペアリングコード（任意。相手が有効化した場合に入力。安全コードの手動照合が不要になります）',
         file: {
           attachTitle: 'ファイルまたは写真を送信',
           busy: '送信中のファイルがあります。完了してから次を送ってください',
@@ -1249,7 +1257,9 @@ export const translations: Record<string, Translations> = {
         pairVerifiedMark: '✓ Código de emparejamiento verificado (anti-MITM automático)',
         pairBarLabel: 'Código de emparejamiento:',
         pairFailed: 'Código de emparejamiento incorrecto o intermediario: desconectado',
-        pairMissingCode: 'Introduce primero el código de emparejamiento',
+        pairMissingCode: 'Introduce primero el código de emparejamiento completo (el generado por el sistema)',
+        pairTimedOut: 'La verificación del emparejamiento expiró: desconectado (comprueba que ambos usáis el mismo código)',
+        pairJoinOptional: 'Código de emparejamiento (opcional; rellénalo si tu par lo activó — verifica automáticamente, sin cotejo manual)',
         file: {
           attachTitle: 'Enviar un archivo o foto',
           busy: 'Ya se está enviando un archivo; espera a que termine antes de enviar otro',

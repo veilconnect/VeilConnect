@@ -1,28 +1,32 @@
 import {
   generatePairingCode,
+  generateNonce,
   groupPairingCode,
   normalizePairingCode,
+  isValidPairingCode,
   buildTranscript,
   preparePairing,
   verifyPeerReveal,
   computeProof,
   commitProof,
   constantTimeEqual,
+  contentGateOpen,
   derivePairingKey,
   PartyKeys,
-  PAIRING_CODE_BYTES
+  PAIRING_CODE_BYTES,
+  MIN_PAIRING_CODE_LENGTH
 } from '../src/web/security/pairing';
 
 // Node 20+ 暴露全局 crypto.subtle，本模块可直接在测试环境跑。
 describe('pairing code (auto anti-MITM)', () => {
-  // 三组互不相同的「身份/box/棘轮」公钥（base64，内容任意但唯一）。
-  const ALICE: PartyKeys = { identityKey: 'QWxpY2VJZA==', boxKey: 'QWxpY2VCb3g=', ratchetKey: 'QWxpY2VSY2g=' };
-  const BOB: PartyKeys = { identityKey: 'Qm9iSWQ=', boxKey: 'Qm9iQm94', ratchetKey: 'Qm9iUmNo' };
+  // 三组互不相同的「身份/box/棘轮 + nonce」（base64，内容任意但唯一）。
+  const ALICE: PartyKeys = { identityKey: 'QWxpY2VJZA==', boxKey: 'QWxpY2VCb3g=', ratchetKey: 'QWxpY2VSY2g=', nonce: 'Tm9uY2VB' };
+  const BOB: PartyKeys = { identityKey: 'Qm9iSWQ=', boxKey: 'Qm9iQm94', ratchetKey: 'Qm9iUmNo', nonce: 'Tm9uY2VC' };
   // 中间人对两端各自冒充用的两套密钥（攻击者自己的身份，无法是 Alice/Bob 的）。
-  const MITM_TO_ALICE: PartyKeys = { identityKey: 'TWl0bUEx', boxKey: 'TWl0bUJveEE=', ratchetKey: 'TWl0bVJjaEE=' };
-  const MITM_TO_BOB: PartyKeys = { identityKey: 'TWl0bUIx', boxKey: 'TWl0bUJveEI=', ratchetKey: 'TWl0bVJjaEI=' };
+  const MITM_TO_ALICE: PartyKeys = { identityKey: 'TWl0bUEx', boxKey: 'TWl0bUJveEE=', ratchetKey: 'TWl0bVJjaEE=', nonce: 'TWl0bU5B' };
+  const MITM_TO_BOB: PartyKeys = { identityKey: 'TWl0bUIx', boxKey: 'TWl0bUJveEI=', ratchetKey: 'TWl0bVJjaEI=', nonce: 'TWl0bU5C' };
 
-  const CODE = 'ABCD1234EFGH5678JKMN90PQ';
+  const CODE = 'ABCD1234EFGH5678JKMN90PQRS'; // 26 字符（满足 MIN_PAIRING_CODE_LENGTH）
 
   describe('code generation & normalization', () => {
     it('生成码为去歧义 Base32，长度对应 128bit（26 字符），且只含字母表字符', () => {
@@ -46,6 +50,17 @@ describe('pairing code (auto anti-MITM)', () => {
     it('分组显示每 4 字符一个连字符', () => {
       expect(groupPairingCode('ABCD1234EFGH')).toBe('ABCD-1234-EFGH');
     });
+
+    it('长度校验：生成码合法，短码非法', () => {
+      expect(isValidPairingCode(generatePairingCode())).toBe(true);
+      expect(isValidPairingCode('ABCD')).toBe(false);
+      expect(isValidPairingCode(CODE)).toBe(true);
+      expect(CODE.length).toBeGreaterThanOrEqual(MIN_PAIRING_CODE_LENGTH);
+    });
+
+    it('generateNonce 每次不同（高熵）', () => {
+      expect(generateNonce()).not.toBe(generateNonce());
+    });
   });
 
   describe('transcript binding', () => {
@@ -61,6 +76,12 @@ describe('pairing code (auto anti-MITM)', () => {
       const base = buildTranscript(ALICE, BOB).transcript;
       const changed = buildTranscript({ ...ALICE, ratchetKey: 'W++=' }, BOB).transcript;
       expect(changed).not.toBe(base);
+    });
+
+    it('nonce 不同即 transcript 不同（防旧 proof 重放）', () => {
+      const base = buildTranscript(ALICE, BOB).transcript;
+      const replayed = buildTranscript({ ...ALICE, nonce: 'Tm9uY2VBMg==' }, BOB).transcript;
+      expect(replayed).not.toBe(base);
     });
   });
 
@@ -104,8 +125,21 @@ describe('pairing code (auto anti-MITM)', () => {
   describe('错误配对码 → 失败', () => {
     it('一端用错码 → 校验失败', async () => {
       const a = await preparePairing(CODE, ALICE, BOB);
-      const bWrong = await preparePairing('ZZZZ9999ZZZZ9999ZZZZ9999', BOB, ALICE);
+      const bWrong = await preparePairing('ZZZZ9999ZZZZ9999ZZZZ9999ZZ', BOB, ALICE); // 26 字符错码
       await expect(verifyPeerReveal(a, bWrong.myCommit, bWrong.myProof)).resolves.toBe(false);
+    });
+
+    it('过短的配对码被拒绝（preparePairing 抛错）', async () => {
+      await expect(preparePairing('ABCD', ALICE, BOB)).rejects.toThrow(/too short/i);
+    });
+  });
+
+  describe('重放：旧 proof 对新 nonce 无效', () => {
+    it('换一端 nonce 后，旧 proof 校验失败', async () => {
+      const a = await preparePairing(CODE, ALICE, BOB);
+      // Bob 用新 nonce 重新参与（新会话）；Alice 仍持旧 a（旧 nonce 组合）
+      const aNew = await preparePairing(CODE, { ...ALICE, nonce: generateNonce() }, { ...BOB, nonce: generateNonce() });
+      await expect(verifyPeerReveal(aNew, a.myCommit, a.myProof)).resolves.toBe(false);
     });
   });
 
@@ -126,6 +160,19 @@ describe('pairing code (auto anti-MITM)', () => {
       expect(p1).toBe(p2);
       expect(await computeProof(key, transcript, 'B')).not.toBe(p1); // 角色绑定
       expect(await commitProof(p1)).toBe(await commitProof(p1));
+    });
+  });
+
+  describe('contentGateOpen（门禁唯一真值来源，fail-closed）', () => {
+    it('配对模式只认 pairVerified，忽略 sasConfirmed', () => {
+      expect(contentGateOpen(true, true, false)).toBe(true);   // 配对已验证 → 放行
+      expect(contentGateOpen(true, false, true)).toBe(false);  // 配对未验证即便 SAS 已确认 → 不放行
+      expect(contentGateOpen(true, false, false)).toBe(false);
+    });
+    it('非配对模式认手动 SAS', () => {
+      expect(contentGateOpen(false, false, true)).toBe(true);
+      expect(contentGateOpen(false, false, false)).toBe(false);
+      expect(contentGateOpen(false, true, false)).toBe(false); // 未启用配对时 pairVerified 不影响
     });
   });
 
