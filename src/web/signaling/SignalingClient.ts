@@ -4,7 +4,7 @@
  * 用原生 WebSocket，协议对齐信令服务器：
  *   发：{ type:'join_room', roomId, token } / { type:'signal', data }
  *   收：{ type:'welcome', clientId } / { type:'room_joined' } / { type:'client_joined' }
- *       { type:'client_left' } / { type:'signal', from, data } / { type:'error', error }
+ *       { type:'client_left' } / { type:'signal', from, data } / { type:'ping' } / { type:'error', error }
  *
  * 信令服务器被视为**不可信中继**：它只搬运 SDP/ICE，无法读取后续 DataChannel 上的端到端密文；
  * 抵御其作恶（替换密钥做 MITM）依赖上层强制的 SAS 带外核对（见 SimpleP2PChat 的安全码流程）。
@@ -80,6 +80,9 @@ export class SignalingClient {
             break;
           case 'signal':
             this.handlers.onSignal?.(msg.data, msg.from);
+            break;
+          case 'ping':
+            this.send({ type: 'pong', timestamp: Date.now() });
             break;
           case 'error':
             this.handlers.onError?.(msg.error || '信令错误');

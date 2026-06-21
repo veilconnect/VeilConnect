@@ -51,7 +51,7 @@ veilconnect/
 ├── server/signaling-server.js         # 信令服务器（房间 + /turn-credentials + 托管 SPA）
 ├── webpack.web.config.js              # 网页 SPA + Worker 打包（输出 server/public）
 ├── Dockerfile · docker-compose.yml · Caddyfile · .env.example   # 一键自部署栈
-├── tests/                             # Jest 单元测试（74 cases）
+├── tests/                             # Jest 单元测试（75 cases）
 └── jest.config.js
 ```
 
@@ -97,7 +97,7 @@ sudo bash /opt/veilconnect/scripts/uninstall.sh
 ```bash
 npm install               # 装依赖
 npm run typecheck         # tsc --noEmit
-npm test                  # 跑 74 个单元测试
+npm test                  # 跑 75 个单元测试
 npm run build:web         # 打包 SPA + Worker 到 server/public
 npm run dev:web           # webpack dev server（热重载，8080）
 ```
@@ -175,8 +175,8 @@ cipher = AES-256-GCM(JSON.stringify(identity), key, iv)
 
 ```
 $ npm test
-Test Suites: 7 passed, 7 total
-Tests:       74 passed, 74 total
+Test Suites: 8 passed, 8 total
+Tests:       75 passed, 75 total
 
 File                       | % Stmts | % Branch | % Funcs | % Lines
 All files                  |   86.26 |    62.13 |   87.15 |   88.32
