@@ -1136,7 +1136,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
 
     try {
       if (iceWarningRef.current) log(iceWarningRef.current, 'WARN');
-      await signaling.connect();
+      await signaling.connect(roomId); // 传 roomId 以便 Cloudflare 信令 Worker 路由到房间 DO
       // 仅房主把人数上限发给服务器锁定；访客不传（也无法放宽房主设定）。
       signaling.join(roomId, token, asHost ? maxClients : undefined);
       log(asHost ? t.chat.p2p.roomReadyWaiting : t.chat.p2p.joinedConnecting);

@@ -85,11 +85,23 @@ export class SignalingClient {
     this.url = url;
   }
 
-  /** 连接并在收到 welcome 后 resolve。 */
-  connect(): Promise<void> {
+  /**
+   * 连接并在收到 welcome 后 resolve。
+   * 传入 roomId 时把它作为 `?room=` 附到 URL——Cloudflare 信令 Worker 据此把连接路由到对应房间的
+   * Durable Object；自托管的 Node 信令服务器忽略该查询参数（房间仍由 join_room 消息确定），故两端兼容。
+   */
+  connect(roomId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
+      let url = this.url;
+      if (roomId) {
+        try {
+          const u = new URL(this.url);
+          if (!u.searchParams.has('room')) u.searchParams.set('room', roomId);
+          url = u.toString();
+        } catch { /* 非法 URL：原样使用 */ }
+      }
       try {
-        this.ws = new WebSocket(this.url);
+        this.ws = new WebSocket(url);
       } catch (err) {
         return reject(err);
       }

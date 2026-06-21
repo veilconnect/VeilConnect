@@ -71,6 +71,11 @@ async function openRoomCodeDialog(page) {
   if (relayMode === 'off') {
     for (const c of [ctxA, ctxB]) await c.addInitScript(() => { try { localStorage.setItem('vc.relayOnly','0'); } catch {} });
   }
+  // SIGNALING_URL 环境变量 → 覆盖信令地址(测 Cloudflare 信令 Worker 用)
+  const sigUrl = process.env.SIGNALING_URL;
+  if (sigUrl) {
+    for (const c of [ctxA, ctxB]) await c.addInitScript((u) => { try { localStorage.setItem('vc.signalingUrl', u); } catch {} }, sigUrl);
+  }
   const A = await ctxA.newPage(); const B = await ctxB.newPage();
   wire(A, 'A', logs); wire(B, 'B', logs);
 

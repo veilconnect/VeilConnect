@@ -1,0 +1,29 @@
+# VeilConnect 信令 Worker（含房间 Durable Object + Cloudflare TURN 凭据签发）。
+#
+# 部署：
+#   cd infra/cloudflare/signaling
+#   wrangler deploy
+#   # 设置 TURN 机密（Cloudflare 控制台 Realtime/Calls → TURN 拿 KEY_ID / API_TOKEN）：
+#   wrangler secret put TURN_KEY_ID
+#   wrangler secret put TURN_API_TOKEN
+#   # 绑定自定义域（控制台 Workers → 你的 worker → Triggers → Custom Domains）：signal.veilconnect.org
+#
+# 本地联调：wrangler dev --port 8787   （DO 在本地 workerd 中运行，可端到端测试）
+name = "veilconnect-signaling"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+
+[durable_objects]
+bindings = [
+  { name = "SIGNALING_ROOM", class_name = "SignalingRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SignalingRoom"]
+
+[vars]
+# 生产部署时改为你的站点来源（逗号分隔可多个）。本地联调默认允许 localhost。
+ALLOWED_ORIGINS = "https://veilconnect.org,http://localhost:8090"
+TURN_TTL = "86400"
+# TURN_KEY_ID / TURN_API_TOKEN 用 `wrangler secret put` 设置，勿写入此文件。
