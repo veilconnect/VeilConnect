@@ -874,7 +874,27 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       },
       onPeerLeft: () => { log(t.chat.p2p.peerLeft, 'WARN'); setConnectionStatus('disconnected'); resetSecureState(); },
       onError: (e) => { log(t.chat.p2p.signalingError, 'ERROR'); dev(`signaling error: ${e}`); },
-      onClose: () => dev('信令连接已关闭')
+      onClose: () => {
+        if (signalingRef.current !== signaling) return;
+        dev('信令连接已关闭');
+        signalingRef.current = null;
+
+        // 信令在 WebRTC/DataChannel 真正建立前断开时，本次房间已不可继续使用；
+        // 直接回到未连接状态，避免页面长期卡在「连接中」和失效分享链接。
+        if (newPc.connectionState !== 'connected') {
+          log(t.chat.p2p.signalingError, 'WARN');
+          try { newPc.close(); } catch { /* ignore */ }
+          if (pcRef.current === newPc) pcRef.current = null;
+          setPc(prev => prev === newPc ? null : prev);
+          setDc(null);
+          setConnectionStatus('disconnected');
+          setRoomLink('');
+          setShowRoomDialog(false);
+          resetSecureState();
+          clearFileTransferState();
+          stopHeartbeat();
+        }
+      }
     });
     signalingRef.current = signaling;
 
@@ -890,7 +910,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       dev(`信令连接失败: ${err instanceof Error ? err.message : err}`);
       setConnectionStatus('disconnected');
     }
-  }, [createPeerConnection, setupDataChannel, addOrBufferCandidate, flushCandidates, resetSecureState, log, dev]);
+  }, [createPeerConnection, setupDataChannel, addOrBufferCandidate, flushCandidates, resetSecureState, clearFileTransferState, stopHeartbeat, log, dev]);
 
   // host：创建房间并生成分享链接
   const createRoom = useCallback(async () => {
