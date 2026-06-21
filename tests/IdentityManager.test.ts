@@ -197,7 +197,7 @@ describe('IdentityManager', () => {
       expect(() => mgr.importPeerIdentity(payload)).toThrow(/binding/i);
     });
 
-    it('兼容 v1 旧格式（无 boxPublicKey）', () => {
+    it('拒绝无 boxPublicKey/keyBindingSignature 的旧格式身份', () => {
       const peer = makeForeignIdentity('Legacy');
       const payload = JSON.stringify({
         userId: peer.userId,
@@ -205,11 +205,7 @@ describe('IdentityManager', () => {
         nickname: 'Legacy'
       });
 
-      const saved = mgr.importPeerIdentity(payload);
-      expect(saved.userId).toBe(peer.userId);
-      expect(saved.boxPublicKey).toBeUndefined();
-      // 无加密公钥绑定的旧身份不得标记为 verified（否则上层会误信其加密通道）
-      expect(saved.verified).toBe(false);
+      expect(() => mgr.importPeerIdentity(payload)).toThrow(/binding/i);
     });
 
     it('只带 boxPublicKey 但缺绑定签名时拒绝导入（不可绕过验签）', () => {

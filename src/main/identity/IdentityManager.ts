@@ -301,27 +301,28 @@ export class IdentityManager {
   }
 
   /**
-   * 导入对端身份。必须通过 ID/公钥校验，并且若带 box 公钥则验证绑定签名。
+   * 导入对端身份。必须通过 ID/公钥校验，并强制验证 Ed25519(boxPublicKey) 绑定签名。
    */
   public importPeerIdentity(identityData: string): PeerIdentity {
     const parsed = JSON.parse(identityData);
-    // 兼容 v1（直接是字段）和 v2（{data:{...}}）格式
+    // 支持直接字段和 {data:{...}} 包装格式；不再接受缺少密钥绑定的旧身份。
     const data = parsed.data ? parsed.data : parsed;
 
     if (!this.verifyUserId(data.userId, data.publicKey)) {
       throw new Error('Invalid user identity: ID does not match public key');
     }
 
-    // 只有同时带 box 公钥与绑定签名、且验签通过，才算「加密公钥已验证」。
-    // 缺失任一字段属于无加密绑定的 v1 旧身份：仍可保存，但绝不能标记为 verified。
     const hasBinding = !!(data.boxPublicKey && data.keyBindingSignature);
-    if (data.boxPublicKey || data.keyBindingSignature) {
-      const ok = hasBinding && this.verifyKeyBinding({
-        publicKey: data.publicKey,
-        boxPublicKey: data.boxPublicKey,
-        keyBindingSignature: data.keyBindingSignature
-      });
-      if (!ok) throw new Error('Key binding signature invalid');
+    if (!hasBinding) {
+      throw new Error('Key binding signature required');
+    }
+    const ok = this.verifyKeyBinding({
+      publicKey: data.publicKey,
+      boxPublicKey: data.boxPublicKey,
+      keyBindingSignature: data.keyBindingSignature
+    });
+    if (!ok) {
+      throw new Error('Key binding signature invalid');
     }
 
     const peerIdentity: PeerIdentity = {
@@ -331,7 +332,7 @@ export class IdentityManager {
       keyBindingSignature: data.keyBindingSignature,
       nickname: data.nickname || '未知用户',
       avatar: data.avatar,
-      verified: hasBinding,
+      verified: true,
       addedAt: Date.now()
     };
 

@@ -16,6 +16,7 @@ const MAX_WS_PAYLOAD = 64 * 1024;          // 64 KB
 const MAX_ROOM_CLIENTS = 4;
 const CONNECTIONS_PER_IP_PER_MIN = 30;
 const MAX_FAILED_JOINS_PER_IP_PER_MIN = 10;   // 防止暴力枚举房间 token
+const RATE_LIMIT_WINDOW_MS = 60_000;
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 
 class SignalingServer {
@@ -98,7 +99,7 @@ class SignalingServer {
     checkRateLimit(ip) {
         const now = Date.now();
         const bucket = this.rateBuckets.get(ip);
-        if (!bucket || now - bucket.windowStart > 60_000) {
+        if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
             this.rateBuckets.set(ip, { count: 1, windowStart: now });
             return true;
         }
@@ -110,7 +111,7 @@ class SignalingServer {
     isJoinThrottled(ip) {
         const now = Date.now();
         const bucket = this.failedJoinBuckets.get(ip);
-        if (!bucket || now - bucket.windowStart > 60_000) return false;
+        if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) return false;
         return bucket.count >= MAX_FAILED_JOINS_PER_IP_PER_MIN;
     }
 
@@ -118,11 +119,21 @@ class SignalingServer {
     recordFailedJoin(ip) {
         const now = Date.now();
         const bucket = this.failedJoinBuckets.get(ip);
-        if (!bucket || now - bucket.windowStart > 60_000) {
+        if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
             this.failedJoinBuckets.set(ip, { count: 1, windowStart: now });
             return;
         }
         bucket.count++;
+    }
+
+    sweepRateLimitBuckets(now = Date.now()) {
+        const expired = (bucket) => !bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS;
+        for (const [ip, bucket] of this.rateBuckets) {
+            if (expired(bucket)) this.rateBuckets.delete(ip);
+        }
+        for (const [ip, bucket] of this.failedJoinBuckets) {
+            if (expired(bucket)) this.failedJoinBuckets.delete(ip);
+        }
     }
 
     hashToken(token) {
@@ -515,6 +526,7 @@ class SignalingServer {
     startHeartbeatSweeper() {
         this.heartbeatTimer = setInterval(() => {
             const now = Date.now();
+            this.sweepRateLimitBuckets(now);
             for (const [ws, client] of this.clients) {
                 if (now - client.lastSeen > HEARTBEAT_TIMEOUT_MS) {
                     console.log(`💤 关闭闲置连接: ${client.id}`);

@@ -53,7 +53,7 @@ keyBindingSignature = Ed25519.sign(boxPublicKey, secretKey)
 
 任一失败即抛错拒绝。
 
-**兼容性**：旧格式（无 `boxPublicKey` / `keyBindingSignature`）仍可导入，但无加密密钥绑定保证；建议旧客户端升级。
+**兼容性**：为了避免长期维护弱身份格式，旧格式（无 `boxPublicKey` / `keyBindingSignature`）不再可导入。所有对端身份必须携带加密公钥绑定签名。
 
 ---
 
@@ -111,14 +111,14 @@ out   = AES-256-GCM(JSON.stringify(identity), key, iv)
 
 ## 测试覆盖
 
-`tests/IdentityManager.test.ts` 17 个 case，关键安全断言：
+`tests/IdentityManager.test.ts` 18 个 case，关键安全断言：
 
 - 篡改的 `userId` 被拒
 - 错误密码导入抛错（不静默失败）
 - 重复导出密文每次不同（盐 + IV 随机性）
 - `importPeerIdentity` 拒绝 userId↔publicKey 不匹配
 - `importPeerIdentity` 拒绝 `boxPublicKey` 签名失效（防 MITM 替换）
-- v1 旧明文格式仍可导入（向后兼容）
+- `importPeerIdentity` 拒绝缺少 `boxPublicKey` / `keyBindingSignature` 的旧格式身份
 - QR 码非 `veilconnect_identity` 类型拒绝
 
 执行：
@@ -166,8 +166,8 @@ npm test
 - ✅ 新增 `boxPublicKey` + `keyBindingSignature`，加密公钥绑定身份（**安全修复**）
 - ✅ 实现 `exportIdentityEncrypted` / `importIdentityEncrypted`（PBKDF2 + AES-256-GCM）
 - ✅ IPC 通道 `identity:exportIdentityEncrypted` / `identity:importIdentityEncrypted`
-- ✅ 17 个单元测试覆盖核心安全断言
-- ✅ 兼容 v1 / v2.1 旧格式导入
+- ✅ 18 个单元测试覆盖核心安全断言
+- ✅ 拒绝 v1 / v2.1 未绑定旧格式导入，长期安全模型不保留弱兼容
 - ✅ 修复源码 GBK 编码乱码
 
 ### v2.1.0 — 之前承诺的 Cloudflare Pages 版本

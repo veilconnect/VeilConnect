@@ -102,6 +102,8 @@ describe('SignalingServer 安全加固', () => {
     afterEach(async () => {
         await Promise.all(sockets.map(closeSocket));
         sockets = [];
+        server.rateBuckets.clear();
+        server.failedJoinBuckets.clear();
     });
 
     test('两个相同 token 的客户端可加入同房并互相中继 signal', async () => {
@@ -221,5 +223,20 @@ describe('SignalingServer 安全加固', () => {
         a.send(JSON.stringify({ type: 'join_room', roomId: 'roomThrottle', token: VALID_TOKEN }));
         const err = await nextMessage(a, (m) => m.type === 'error');
         expect(err.error).toMatch(/Too many failed join attempts/);
+    });
+
+    test('过期的连接限速和失败 join 限速 bucket 会被清理', () => {
+        const now = Date.now();
+        server.rateBuckets.set('198.51.100.10', { count: 30, windowStart: now - 61_000 });
+        server.rateBuckets.set('198.51.100.11', { count: 1, windowStart: now });
+        server.failedJoinBuckets.set('198.51.100.20', { count: 10, windowStart: now - 61_000 });
+        server.failedJoinBuckets.set('198.51.100.21', { count: 1, windowStart: now });
+
+        server.sweepRateLimitBuckets(now);
+
+        expect(server.rateBuckets.has('198.51.100.10')).toBe(false);
+        expect(server.rateBuckets.has('198.51.100.11')).toBe(true);
+        expect(server.failedJoinBuckets.has('198.51.100.20')).toBe(false);
+        expect(server.failedJoinBuckets.has('198.51.100.21')).toBe(true);
     });
 });

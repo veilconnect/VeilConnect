@@ -187,8 +187,8 @@ All files                  |   86.26 |    62.13 |   87.15 |   88.32
  MessageHistoryManager.ts  |   90.69 |       75 |   89.65 |   93.93
 ```
 
-> 信令服务器的安全加固测试（房间 token、失败 join 限速、反代真实 IP 解析）单独跑（依赖 `server/node_modules`）：
-> `npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js"` → 8 passed。
+> 信令服务器的安全加固测试（房间 token、失败 join 限速、反代真实 IP 解析、限速桶清理）单独跑（依赖 `server/node_modules`）：
+> `npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js"` → 10 passed。
 
 关键的安全断言（不仅是 happy path）：
 
@@ -197,7 +197,7 @@ All files                  |   86.26 |    62.13 |   87.15 |   88.32
 - ✅ 每次导出密文不同（验证随机盐 + IV）
 - ✅ `importPeerIdentity` 拒绝 userId↔publicKey 不匹配
 - ✅ `importPeerIdentity` 拒绝 boxPublicKey 签名失效（防 MITM）
-- ✅ 兼容 v1 旧明文身份格式（无 boxPublicKey 时跳过验签）
+- ✅ `importPeerIdentity` 拒绝缺少 boxPublicKey/keyBindingSignature 的未绑定身份
 - ✅ `verifyEphemeralKey` 拒绝伪造的 ratchet 身份签名（防 MITM）
 - ✅ Double Ratchet 往返加解密、抗重放（重放旧密文被拒）
 - ✅ `verifySignature` 接受正确 Ed25519 签名、拒绝篡改消息
