@@ -7,6 +7,8 @@
 
 const express = require('express');
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const WebSocket = require('ws');
 const path = require('path');
 const cors = require('cors');
@@ -23,7 +25,22 @@ class SignalingServer {
     constructor(port = 3001) {
         this.port = port;
         this.app = express();
-        this.server = http.createServer(this.app);
+
+        // 可选 HTTPS：设 TLS_CERT + TLS_KEY（PEM 路径）即以 https 起服务，wss 自动随之启用。
+        // 内网/WG 测试必须走 HTTPS——浏览器 crypto.subtle 仅在安全上下文（HTTPS 或 localhost）可用，
+        // 经 http://<内网IP> 访问会导致全部加密能力不可用。未设则回退 http（仅 localhost 开发用）。
+        const tlsCert = process.env.TLS_CERT;
+        const tlsKey = process.env.TLS_KEY;
+        if (tlsCert && tlsKey) {
+            this.server = https.createServer({
+                cert: fs.readFileSync(tlsCert),
+                key: fs.readFileSync(tlsKey)
+            }, this.app);
+            this.protocol = 'https';
+        } else {
+            this.server = http.createServer(this.app);
+            this.protocol = 'http';
+        }
         this.wss = new WebSocket.Server({
             server: this.server,
             maxPayload: MAX_WS_PAYLOAD,
@@ -46,6 +63,10 @@ class SignalingServer {
         // 故倒数第 1 段是 Caddy 亲自写入的真实客户端地址，无法被客户端伪造（客户端伪造的内容只会出现在更靠左的位置）。
         this.trustProxyHops = parseInt(process.env.TRUST_PROXY || '0', 10) || 0;
 
+        // 隐私默认：默认【不】记录任何含元数据（客户端 IP / clientId / roomId / 消息类型）的日志，
+        // 以免信令服务器变成「谁在何时与谁连接」的旁路元数据库。运维排障可设 SIGNAL_VERBOSE=1 开启。
+        this.verbose = process.env.SIGNAL_VERBOSE === '1';
+
         this.setupMiddleware();
         this.setupRoutes();
         this.setupWebSocket();
@@ -54,6 +75,12 @@ class SignalingServer {
         console.log('🚀 VeilConnect 信令服务器初始化完成');
         console.log(`🔐 Allowed origins: ${this.allowedOrigins.join(', ')}`);
         console.log(`🔀 Trust proxy hops: ${this.trustProxyHops}${this.trustProxyHops === 0 ? ' (直接暴露；若在反代后请设 TRUST_PROXY=代理跳数)' : ''}`);
+        console.log(`🕵️  Verbose metadata logging: ${this.verbose ? 'ON (含 IP/clientId，排障用)' : 'OFF (隐私默认，不记录元数据)'}`);
+    }
+
+    /** 仅在 SIGNAL_VERBOSE=1 时输出含元数据的日志（IP / clientId / roomId / 消息类型）。 */
+    vlog(...args) {
+        if (this.verbose) console.log(...args);
     }
 
     /**
@@ -84,12 +111,12 @@ class SignalingServer {
         const remoteIp = this.clientIp(info.req);
 
         if (!this.isOriginAllowed(origin)) {
-            console.warn(`🚫 拒绝连接（origin 不在白名单）: ${origin} from ${remoteIp}`);
+            this.vlog(`🚫 拒绝连接（origin 不在白名单）: ${origin} from ${remoteIp}`);
             return cb(false, 403, 'Origin not allowed');
         }
 
         if (!this.checkRateLimit(remoteIp)) {
-            console.warn(`🚫 拒绝连接（限速）: ${remoteIp}`);
+            this.vlog(`🚫 拒绝连接（限速）: ${remoteIp}`);
             return cb(false, 429, 'Too many connections');
         }
 
@@ -186,7 +213,7 @@ class SignalingServer {
         this.app.use(express.static(path.join(__dirname, 'public')));
 
         this.app.use((req, res, next) => {
-            console.log(`📡 ${req.method} ${req.url}`);
+            this.vlog(`📡 ${req.method} ${req.url}`);
             next();
         });
     }
@@ -283,7 +310,7 @@ class SignalingServer {
             
             this.clients.set(ws, clientInfo);
             
-            console.log(`👤 客户端连接: ${clientId} (总计: ${this.clients.size})`);
+            this.vlog(`👤 客户端连接: ${clientId} (总计: ${this.clients.size})`);
             
             // 发送欢迎消息
             this.sendMessage(ws, {
@@ -326,7 +353,7 @@ class SignalingServer {
         const client = this.clients.get(ws);
         if (!client) return;
         
-        console.log(`📨 收到消息 (${client.id}): ${message.type}`);
+        this.vlog(`📨 收到消息 (${client.id}): ${message.type}`);
         
         // 收到任意消息都视为活跃，刷新心跳时间戳
         client.lastSeen = Date.now();
@@ -373,7 +400,7 @@ class SignalingServer {
 
         // 失败 join 限速：阻止暴力枚举房间 token
         if (this.isJoinThrottled(ip)) {
-            console.warn(`🚫 join_room 被限速（失败次数过多）: ${ip}`);
+            this.vlog(`🚫 join_room 被限速（失败次数过多）: ${ip}`);
             return this.sendMessage(ws, { type: 'error', error: 'Too many failed join attempts, try again later' });
         }
 
@@ -401,7 +428,7 @@ class SignalingServer {
             room = { clients: new Set(), tokenHash, maxClients: cap };
             this.rooms.set(roomId, room);
         } else if (!this.tokenHashMatches(room.tokenHash, tokenHash)) {
-            console.warn(`🚫 房间 token 不匹配: ${roomId}`);
+            this.vlog(`🚫 房间 token 不匹配: ${roomId}`);
             this.recordFailedJoin(ip);
             return this.sendMessage(ws, { type: 'error', error: 'Invalid room token' });
         }
@@ -416,7 +443,7 @@ class SignalingServer {
         room.clients.add(ws);
         client.roomId = roomId;
 
-        console.log(`🏠 客户端 ${client.id} 加入房间 ${roomId} (房间人数: ${room.clients.size})`);
+        this.vlog(`🏠 客户端 ${client.id} 加入房间 ${roomId} (房间人数: ${room.clients.size})`);
 
         this.sendMessage(ws, {
             type: 'room_joined',
@@ -441,7 +468,7 @@ class SignalingServer {
         if (room) {
             room.clients.delete(ws);
 
-            console.log(`🚪 客户端 ${client.id} 离开房间 ${client.roomId} (房间人数: ${room.clients.size})`);
+            this.vlog(`🚪 客户端 ${client.id} 离开房间 ${client.roomId} (房间人数: ${room.clients.size})`);
 
             this.broadcastToRoom(client.roomId, {
                 type: 'client_left',
@@ -452,7 +479,7 @@ class SignalingServer {
 
             if (room.clients.size === 0) {
                 this.rooms.delete(client.roomId);
-                console.log(`🗑️ 房间 ${client.roomId} 已删除（无人）`);
+                this.vlog(`🗑️ 房间 ${client.roomId} 已删除（无人）`);
             }
         }
 
@@ -480,14 +507,14 @@ class SignalingServer {
         
         this.broadcastToRoom(client.roomId, signalData, ws);
         
-        console.log(`🔄 转发信令 (${client.id} -> 房间 ${client.roomId}): ${message.data?.type || 'unknown'}`);
+        this.vlog(`🔄 转发信令 (${client.id} -> 房间 ${client.roomId}): ${message.data?.type || 'unknown'}`);
     }
     
     handleDisconnect(ws) {
         const client = this.clients.get(ws);
         if (!client) return;
         
-        console.log(`👋 客户端断开连接: ${client.id}`);
+        this.vlog(`👋 客户端断开连接: ${client.id}`);
         
         // 离开房间
         this.handleLeaveRoom(ws);
@@ -495,7 +522,7 @@ class SignalingServer {
         // 移除客户端
         this.clients.delete(ws);
         
-        console.log(`📊 当前连接数: ${this.clients.size}`);
+        this.vlog(`📊 当前连接数: ${this.clients.size}`);
     }
     
     broadcastToRoom(roomId, message, excludeWs = null) {
@@ -510,7 +537,7 @@ class SignalingServer {
             }
         });
 
-        console.log(`📢 广播消息到房间 ${roomId}: ${sentCount} 个客户端`);
+        this.vlog(`📢 广播消息到房间 ${roomId}: ${sentCount} 个客户端`);
     }
     
     sendMessage(ws, message) {
@@ -529,7 +556,7 @@ class SignalingServer {
             this.sweepRateLimitBuckets(now);
             for (const [ws, client] of this.clients) {
                 if (now - client.lastSeen > HEARTBEAT_TIMEOUT_MS) {
-                    console.log(`💤 关闭闲置连接: ${client.id}`);
+                    this.vlog(`💤 关闭闲置连接: ${client.id}`);
                     try { ws.close(1000, 'Idle timeout'); } catch {}
                     this.handleDisconnect(ws);
                     continue;
@@ -542,11 +569,12 @@ class SignalingServer {
     }
     
     start() {
+        const wsScheme = this.protocol === 'https' ? 'wss' : 'ws';
         this.server.listen(this.port, () => {
-            console.log(`🌟 VeilConnect 信令服务器启动成功!`);
-            console.log(`📡 WebSocket: ws://localhost:${this.port}`);
-            console.log(`🌐 HTTP API: http://localhost:${this.port}`);
-            console.log(`💚 健康检查: http://localhost:${this.port}/health`);
+            console.log(`🌟 VeilConnect 信令服务器启动成功! (${this.protocol.toUpperCase()})`);
+            console.log(`📡 WebSocket: ${wsScheme}://localhost:${this.port}`);
+            console.log(`🌐 HTTP API: ${this.protocol}://localhost:${this.port}`);
+            console.log(`💚 健康检查: ${this.protocol}://localhost:${this.port}/health`);
             console.log(`📊 房间管理: http://localhost:${this.port}/api/rooms`);
             console.log('');
             console.log('🔗 支持的WebSocket消息类型:');
