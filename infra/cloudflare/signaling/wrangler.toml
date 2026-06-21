@@ -13,17 +13,23 @@ name = "veilconnect-signaling"
 main = "src/worker.js"
 compatibility_date = "2024-09-23"
 
+# 自定义域：把信令 Worker 绑到 signal.veilconnect.org（wrangler 自动建 DNS + 证书）。
+[[routes]]
+pattern = "signal.veilconnect.org"
+custom_domain = true
+
 [durable_objects]
 bindings = [
   { name = "SIGNALING_ROOM", class_name = "SignalingRoom" }
 ]
 
+# SQLite-backed DO（new_sqlite_classes）以兼容 Cloudflare 免费套餐（本 DO 不落存储，仅用内存中继）。
 [[migrations]]
 tag = "v1"
-new_classes = ["SignalingRoom"]
+new_sqlite_classes = ["SignalingRoom"]
 
 [vars]
-# 生产部署时改为你的站点来源（逗号分隔可多个）。本地联调默认允许 localhost。
-ALLOWED_ORIGINS = "https://veilconnect.org,http://localhost:8090"
+# 允许的网页来源（逗号分隔）：托管站点的 apex + www + Pages 别名。本地联调用 `wrangler dev --var` 覆盖。
+ALLOWED_ORIGINS = "https://veilconnect.org,https://www.veilconnect.org,https://veilconnect.pages.dev"
 TURN_TTL = "86400"
 # TURN_KEY_ID / TURN_API_TOKEN 用 `wrangler secret put` 设置，勿写入此文件。

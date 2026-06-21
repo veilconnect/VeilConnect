@@ -12,7 +12,12 @@ export const FALLBACK_STUN: RTCIceServer[] = [
 ];
 // 探测前的安全默认：先把全部列上（保证即使在探测完成前建连也有可用 STUN），探测后再收敛。
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [PRIMARY_STUN, ...FALLBACK_STUN];
-export const DEFAULT_TURN_ENDPOINT = '/turn-credentials';
+
+// 构建期注入（webpack DefinePlugin）：托管版指向独立信令 Worker 的 /turn-credentials；
+// 自部署版为空 → 同源 '/turn-credentials'（信令服务器内置该端点）。
+declare const __VC_TURN_ENDPOINT__: string | undefined;
+export const DEFAULT_TURN_ENDPOINT: string =
+  (typeof __VC_TURN_ENDPOINT__ === 'string' && __VC_TURN_ENDPOINT__) ? __VC_TURN_ENDPOINT__ : '/turn-credentials';
 
 /** 一个 iceServers 配置里是否含至少一个 TURN（relay 模式下没有 TURN 就无法建连）。 */
 export function hasTurnServer(servers: RTCIceServer[]): boolean {

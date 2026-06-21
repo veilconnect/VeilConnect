@@ -20,12 +20,23 @@ export interface SignalingHandlers {
   onClose?: () => void;
 }
 
-/** 默认信令地址：同源（部署时信令服务器同时托管网页）。dev 可用 localStorage 'vc.signalingUrl' 覆盖。 */
+// 构建期注入（webpack DefinePlugin）：托管版指向独立信令 Worker；自部署版为空 → 回退同源。
+declare const __VC_SIGNALING_URL__: string | undefined;
+
+/**
+ * 默认信令地址，优先级：
+ *   ① localStorage 'vc.signalingUrl' 覆盖（dev/调试）
+ *   ② 构建期注入的 __VC_SIGNALING_URL__（如 Cloudflare Pages 版 → wss://signal.veilconnect.org）
+ *   ③ 同源 wss（自部署：信令服务器同时托管网页）
+ */
 export function defaultSignalingUrl(): string {
   try {
     const override = typeof localStorage !== 'undefined' && localStorage.getItem('vc.signalingUrl');
     if (override) return override;
   } catch { /* ignore */ }
+  try {
+    if (typeof __VC_SIGNALING_URL__ === 'string' && __VC_SIGNALING_URL__) return __VC_SIGNALING_URL__;
+  } catch { /* 未注入（如测试环境）→ 忽略 */ }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}`;
 }

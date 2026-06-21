@@ -80,6 +80,12 @@ module.exports = (env, argv) => {
         template: path.resolve(__dirname, 'src/renderer/index.html'),
         inject: 'body'
       }),
+      // 构建期注入信令/TURN 默认地址：托管版（如 Cloudflare Pages）用 VC_SIGNALING_URL /
+      // VC_TURN_ENDPOINT 指向独立的信令 Worker；自部署版不设 → 留空 → 运行时回退同源（同一服务器托管信令）。
+      new webpack.DefinePlugin({
+        __VC_SIGNALING_URL__: JSON.stringify(process.env.VC_SIGNALING_URL || ''),
+        __VC_TURN_ENDPOINT__: JSON.stringify(process.env.VC_TURN_ENDPOINT || '')
+      }),
       new webpack.ProvidePlugin({
         Buffer: ['buffer', 'Buffer'],
         process: 'process/browser'
