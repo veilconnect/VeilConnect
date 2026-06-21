@@ -148,6 +148,9 @@ const UnlockGate: React.FC = () => {
         <p style={{ margin: '16px 0 0', color: '#999', fontSize: 12, lineHeight: 1.5 }}>
           口令在本浏览器派生主密钥解密本地身份，绝不上传。忘记口令将无法恢复旧身份；可点上方「重置并新建身份」用新口令重来（或用此前加密导出的身份文件在新设备恢复）。
         </p>
+        <p style={{ margin: '12px 0 0', textAlign: 'center', fontSize: 12 }}>
+          <a href="/download" style={{ color: '#667eea', textDecoration: 'none' }}>了解 VeilConnect · 下载桌面版 · 自部署 →</a>
+        </p>
       </form>
     </div>
   );

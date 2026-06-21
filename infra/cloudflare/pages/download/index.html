@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VeilConnect — 下载与使用</title>
+<style>
+  :root { --p1:#667eea; --p2:#764ba2; --ink:#222; --muted:#666; --line:#e6e8ef; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; color:var(--ink); line-height:1.65; background:#fafbfe; }
+  a { color:#5a4bd0; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+  header { background: linear-gradient(135deg,var(--p1),var(--p2)); color:#fff; padding: 56px 0 48px; }
+  header .wrap { text-align:center; }
+  h1 { margin:0 0 8px; font-size: 34px; letter-spacing:1px; }
+  .tag { opacity:.95; font-size:17px; margin:0 0 24px; }
+  .cta { display:inline-block; background:#fff; color:#5a4bd0; font-weight:700; text-decoration:none; padding:13px 26px; border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.18); }
+  .cta:hover { transform: translateY(-1px); }
+  section { padding: 40px 0; border-bottom:1px solid var(--line); }
+  h2 { font-size:21px; margin:0 0 14px; }
+  .cards { display:grid; grid-template-columns: 1fr; gap:16px; }
+  @media(min-width:720px){ .cards{ grid-template-columns:1fr 1fr 1fr; } }
+  .card { border:1px solid var(--line); border-radius:12px; padding:18px; background:#fff; }
+  .card h3 { margin:0 0 6px; font-size:16px; }
+  .card p { margin:0 0 12px; color:var(--muted); font-size:14px; }
+  .btn { display:inline-block; text-decoration:none; padding:8px 14px; border-radius:8px; font-size:14px; font-weight:600; }
+  .btn.primary { background:linear-gradient(135deg,var(--p1),var(--p2)); color:#fff; }
+  .btn.ghost { border:1px solid #cdd2e4; color:#5a4bd0; }
+  .badge { display:inline-block; font-size:12px; color:#a05a00; background:#fff3cd; border-radius:6px; padding:2px 8px; margin-left:6px; }
+  pre { background:#0f1320; color:#d8e0ff; padding:12px 14px; border-radius:8px; overflow:auto; font-size:13px; }
+  .trust { background:#fff7e6; border:1px solid #ffe2a8; border-radius:12px; padding:16px 18px; }
+  .muted { color:var(--muted); font-size:14px; }
+  footer { padding:28px 0 48px; color:var(--muted); font-size:13px; text-align:center; }
+  ul { padding-left:20px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>🔒 VeilConnect</h1>
+    <p class="tag">端到端加密聊天 · 打开网页即用 · 无需安装 · 服务器不存任何聊天内容</p>
+    <a class="cta" href="/">在浏览器中直接使用 →</a>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>三种使用方式</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>🌐 浏览器版</h3>
+        <p>打开即用,无需安装。消息经 WebRTC 在两个浏览器之间直接传递,端到端加密。</p>
+        <a class="btn primary" href="/">立即使用</a>
+      </div>
+      <div class="card">
+        <h3>🖥️ 桌面版 <span class="badge">筹备中</span></h3>
+        <p>私钥由操作系统钥匙串保护、只加载随安装包分发的本地代码(信任更强,不依赖服务器下发脚本)。签名安装包即将提供;现可从源码自行构建。</p>
+        <a class="btn ghost" href="https://github.com/veilconnect/VeilConnect/blob/main/docs/DESKTOP_BUILD.md">从源码构建</a>
+      </div>
+      <div class="card">
+        <h3>🔧 自己部署</h3>
+        <p>一条命令把整套(网页 + 信令 + TURN + 自动 HTTPS)跑在你自己的服务器上,信任完全自控。</p>
+        <a class="btn ghost" href="https://github.com/veilconnect/VeilConnect#快速上手">部署指引</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>自己部署(推荐给重视隐私的用户)</h2>
+    <p class="muted">在一台有公网 IP 的 Linux 服务器上,一条命令即可(自动装 Docker、克隆代码、签发 HTTPS 证书、起服务):</p>
+    <pre>curl -fsSL https://raw.githubusercontent.com/veilconnect/VeilConnect/main/scripts/bootstrap.sh | sudo bash -s -- chat.example.com</pre>
+    <p class="muted">局域网/无域名先本机试用:把末尾换成 <code>--local</code>。完整说明见
+      <a href="https://github.com/veilconnect/VeilConnect/blob/main/docs/user/SELF_HOST_GUIDE.md">自部署指南</a>。</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>安全与信任(请务必读懂)</h2>
+    <div class="trust">
+      <ul>
+        <li><b>端到端加密</b>:消息走 Double Ratchet(Signal 协议),每条消息一把密钥、用后即删(前向保密);服务器只搬运,读不到内容。</li>
+        <li><b>防中间人</b>:连上后双方会得到一个<b>安全码</b>,需当面/电话核对一致(或用<b>配对码</b>自动校验)后才放行消息。<b>请务必核对</b>。</li>
+        <li><b>网页版的信任边界(诚实告知)</b>:你打开本站,就需要信任 veilconnect.org 下发的网页代码。我们用 SRI(子资源完整性)让"脚本被篡改"可被浏览器检测,但<b>无法完全消除</b>。若你不想信任本站,请<b>自己部署</b>或使用<b>签名桌面版</b>。</li>
+        <li><b>元数据</b>:内容加密,但"谁在何时连接、IP"等元数据仍可能被中继方看到。高威胁场景请叠加 VPN/Tor。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    源码(MIT):<a href="https://github.com/veilconnect/VeilConnect">github.com/veilconnect/VeilConnect</a>
+    · <a href="https://github.com/veilconnect/VeilConnect/blob/main/docs/security/THREAT_MODEL.md">威胁模型</a>
+    · <a href="https://github.com/veilconnect/VeilConnect/blob/main/docs/security/CRYPTO_RATIONALE.md">密码学说明</a>
+    <br/>© 2026 VeilConnect · 端到端加密 · 服务器不存聊天内容
+  </div>
+</footer>
+</body>
+</html>
