@@ -1,0 +1,94 @@
+name: Release Desktop
+
+# 推送 v* 标签即构建三平台桌面安装包并发到 GitHub Releases。
+# 无签名证书时出【未签名】安装包（mac/win 会有系统安全提示）；
+# 配好下方 Secret 后自动【签名+公证】。手动 workflow_dispatch 可只构建不发布（验证流水线）。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 创建/上传 Release
+
+env:
+  # 桌面版默认接入托管信令（与网页版同一网络，桌面↔网页可互通）。
+  # 信令被视为不可信中继，不影响端到端加密；自部署者可改 localStorage 'vc.signalingUrl' 覆盖。
+  VC_SIGNALING_URL: wss://signal.veilconnect.org
+  VC_TURN_ENDPOINT: https://signal.veilconnect.org/turn-credentials
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 需要真实 electron 二进制来打包，故不跳过；--omit=optional 跳过仅测试用的重型可选依赖
+      # (puppeteer/Chromium、node-datachannel 源码编译)。
+      - name: Install dependencies
+        run: npm ci --omit=optional
+
+      - name: Install electron-builder
+        run: npm i -D electron-builder --no-save
+
+      # 渲染端(dist/renderer，信令已烘焙) + 主进程(dist/electron)
+      - name: Build renderer + main process
+        run: npm run build:electron
+
+      - name: Package installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # —— 代码签名（配好以下仓库 Secret 即自动启用；缺省则出未签名包）——
+          # macOS: CSC_LINK(.p12 base64)+CSC_KEY_PASSWORD；公证: APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID
+          # Windows: CSC_LINK+CSC_KEY_PASSWORD（或 Azure Trusted Signing）
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # 无 mac 证书时禁用「自动发现签名身份」，强制出未签名包（避免误用 runner 钥匙串）。
+          if [ -z "${CSC_LINK:-}" ]; then export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
+          # 公证仅在提供了 Apple 凭据时启用。
+          NOTARIZE_FLAG=""
+          if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then NOTARIZE_FLAG="-c.mac.notarize=true"; fi
+          npx electron-builder --config electron-builder.yml --publish never $NOTARIZE_FLAG
+
+      - name: List artifacts
+        shell: bash
+        run: ls -la release || true
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+          fail_on_unmatched_files: false
+          body: |
+            ## VeilConnect 桌面版 ${{ github.ref_name }}
+
+            端到端加密聊天桌面客户端（OS 钥匙串保护私钥、只加载本地代码）。
+
+            | 平台 | 文件 |
+            |---|---|
+            | macOS | `.dmg` / `.zip` |
+            | Windows | `.exe`(安装程序) |
+            | Linux | `.AppImage` / `.deb` |
+
+            > ⚠️ 若为**未签名**版本：macOS 首次打开需右键「打开」并确认；Windows SmartScreen 需点「更多信息 → 仍要运行」。签名版发布后此提示消失。
+            > 网页版直接用：https://veilconnect.org ｜ 自部署：见仓库 README。

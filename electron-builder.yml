@@ -29,11 +29,12 @@ asar: true
 
 mac:
   category: public.app-category.social-networking
-  hardenedRuntime: true       # 公证前提
+  hardenedRuntime: true       # 签名/公证前提（无证书时 electron-builder 自动跳过签名，出未签名包）
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  notarize: true              # 需 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+  # 默认不公证（未签名开发版）。配好 Apple 证书后，release 工作流会注入 APPLE_* 并启用公证。
+  notarize: false
   target:
     - dmg
     - zip
