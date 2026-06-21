@@ -4,11 +4,14 @@ WORKDIR /app
 # --omit=optional 跳过仅测试用的重型原生依赖（puppeteer 下 Chromium / node-datachannel cmake 源码编译），
 # slim 镜像无 tar/unzip/编译工具会令其失败；构建网页 SPA 用不到它们。
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json package-lock.json ./
 RUN npm ci --omit=optional --no-audit --no-fund
 COPY tsconfig.json webpack.web.config.js ./
 COPY src ./src
+# scripts/ 含 build:web 的 postbuild 钩子（gen-sri.js 注入 SRI），必须在构建前就位。
+COPY scripts ./scripts
 RUN npm run build:web
 
 FROM node:20-bookworm-slim AS runtime
