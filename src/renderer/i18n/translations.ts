@@ -217,6 +217,17 @@ export interface Translations {
       notSecureYet: string;
       verifySasFirst: string;
       invalidRoomLink: string;
+      roomCodeBtn: string;
+      roomCodeTitle: string;
+      roomCodeDialogTitle: string;
+      roomCodeDialogBody: string;
+      roomCodePlaceholder: string;
+      roomCodeSecurityHint: string;
+      roomCodeCreateBtn: string;
+      roomCodeJoinBtn: string;
+      roomCodeTooShort: string;
+      roomCodeShareLabel: string;
+      roomCodeShareHint: string;
       disconnectedManual: string;
       copiedToClipboard: string;
       relayNotReady: string;
@@ -474,6 +485,17 @@ export const translations: Record<string, Translations> = {
         notSecureYet: '安全通道尚未建立，无法发送消息',
         verifySasFirst: '请先与对方通过电话/当面核对安全码并确认一致，再发送消息',
         invalidRoomLink: '房间链接无效，应形如 https://…/#room=xxx&t=yyy',
+        roomCodeBtn: '🔢 房间号',
+        roomCodeTitle: '用约定的房间号连接（无需发送长链接）',
+        roomCodeDialogTitle: '用房间号连接',
+        roomCodeDialogBody: '两人约定同一个房间号：一方点「创建」，另一方点「加入」。无需互发那串很长的房间链接。',
+        roomCodePlaceholder: '输入约定的房间号（至少 6 个字符）',
+        roomCodeSecurityHint: '房间号只是会合标识、可能被他人猜中；真正防中间人靠握手后核对安全码/配对码——请务必核对。',
+        roomCodeCreateBtn: '创建房间',
+        roomCodeJoinBtn: '加入房间',
+        roomCodeTooShort: '房间号太短（至少 6 个字符）',
+        roomCodeShareLabel: '把这个房间号告诉对方：',
+        roomCodeShareHint: '让对方在「房间号」里点「加入房间」、输入同一个号码即可连接。记得核对安全码/配对码。',
         disconnectedManual: '已断开连接',
         copiedToClipboard: '已复制到剪贴板',
         relayNotReady: '中继服务器未就绪，可能无法连接。如长时间连不上，请联系站点管理员。',
@@ -728,6 +750,17 @@ export const translations: Record<string, Translations> = {
         notSecureYet: 'The secure channel is not ready; cannot send messages',
         verifySasFirst: 'First verify the safety code with your peer by phone / in person and confirm it matches, then send messages',
         invalidRoomLink: 'Invalid room link. It should look like https://…/#room=xxx&t=yyy',
+        roomCodeBtn: '🔢 Room code',
+        roomCodeTitle: 'Connect with an agreed room code (no long link to send)',
+        roomCodeDialogTitle: 'Connect by room code',
+        roomCodeDialogBody: 'Agree on the same room code: one person taps Create, the other taps Join. No need to send the long room link.',
+        roomCodePlaceholder: 'Enter the agreed room code (min 6 chars)',
+        roomCodeSecurityHint: 'A room code is only a rendezvous label and can be guessed; MITM protection still comes from verifying the safety code / pairing code after connecting — be sure to verify.',
+        roomCodeCreateBtn: 'Create room',
+        roomCodeJoinBtn: 'Join room',
+        roomCodeTooShort: 'Room code too short (min 6 chars)',
+        roomCodeShareLabel: 'Tell your peer this room code:',
+        roomCodeShareHint: 'Have them open “Room code”, tap Join, and enter the same code. Remember to verify the safety/pairing code.',
         disconnectedManual: 'Disconnected',
         copiedToClipboard: 'Copied to clipboard',
         relayNotReady: 'The relay server is not ready and the connection may fail. If it stays unreachable, contact the site administrator.',
@@ -982,6 +1015,17 @@ export const translations: Record<string, Translations> = {
         notSecureYet: 'セキュアチャネルが未確立のためメッセージを送信できません',
         verifySasFirst: 'まず電話・対面で相手と安全コードを照合し一致を確認してからメッセージを送信してください',
         invalidRoomLink: 'ルームリンクが無効です。https://…/#room=xxx&t=yyy の形式である必要があります',
+        roomCodeBtn: '🔢 ルーム番号',
+        roomCodeTitle: '取り決めたルーム番号で接続（長いリンク送信不要）',
+        roomCodeDialogTitle: 'ルーム番号で接続',
+        roomCodeDialogBody: '同じルーム番号を取り決め、一方が「作成」、もう一方が「参加」を押します。長いルームリンクの送信は不要です。',
+        roomCodePlaceholder: '取り決めたルーム番号を入力（6文字以上）',
+        roomCodeSecurityHint: 'ルーム番号は待ち合わせ用の識別子で推測されうる。中間者対策は接続後の安全コード／ペアリングコードの照合で行うため、必ず照合してください。',
+        roomCodeCreateBtn: 'ルーム作成',
+        roomCodeJoinBtn: 'ルーム参加',
+        roomCodeTooShort: 'ルーム番号が短すぎます（6文字以上）',
+        roomCodeShareLabel: 'このルーム番号を相手に伝えてください：',
+        roomCodeShareHint: '相手に「ルーム番号」から「参加」を押して同じ番号を入力してもらいます。安全／ペアリングコードの照合をお忘れなく。',
         disconnectedManual: '切断しました',
         copiedToClipboard: 'クリップボードにコピーしました',
         relayNotReady: '中継サーバーの準備ができておらず接続できない可能性があります。長時間つながらない場合はサイト管理者にお問い合わせください。',
@@ -1236,6 +1280,17 @@ export const translations: Record<string, Translations> = {
         notSecureYet: 'El canal seguro no está listo; no se pueden enviar mensajes',
         verifySasFirst: 'Primero verifica el código de seguridad con tu par por teléfono / en persona y confirma que coincide, luego envía mensajes',
         invalidRoomLink: 'Enlace de sala no válido. Debe verse como https://…/#room=xxx&t=yyy',
+        roomCodeBtn: '🔢 Código de sala',
+        roomCodeTitle: 'Conectar con un código de sala acordado (sin enviar enlace largo)',
+        roomCodeDialogTitle: 'Conectar por código de sala',
+        roomCodeDialogBody: 'Acuerden el mismo código de sala: una persona pulsa Crear y la otra Unirse. No hace falta enviar el enlace largo.',
+        roomCodePlaceholder: 'Introduce el código de sala acordado (mín. 6 caracteres)',
+        roomCodeSecurityHint: 'Un código de sala es solo un identificador de encuentro y puede adivinarse; la protección contra intermediarios sigue dependiendo de verificar el código de seguridad / emparejamiento tras conectar: verifícalo.',
+        roomCodeCreateBtn: 'Crear sala',
+        roomCodeJoinBtn: 'Unirse a la sala',
+        roomCodeTooShort: 'Código de sala demasiado corto (mín. 6 caracteres)',
+        roomCodeShareLabel: 'Dile a tu interlocutor este código de sala:',
+        roomCodeShareHint: 'Que abra “Código de sala”, pulse Unirse e introduzca el mismo código. Recuerda verificar el código de seguridad/emparejamiento.',
         disconnectedManual: 'Desconectado',
         copiedToClipboard: 'Copiado al portapapeles',
         relayNotReady: 'El servidor de retransmisión no está listo y la conexión puede fallar. Si sigue sin estar disponible, contacta al administrador del sitio.',

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from '../i18n/useTranslation';
-import { SignalingClient, generateRoomCredentials } from '../../web/signaling/SignalingClient';
+import { SignalingClient, generateRoomCredentials, deriveRoomCredentials, isValidRoomCode, normalizeRoomCode } from '../../web/signaling/SignalingClient';
 import {
   ChunkAssembler,
   DEFAULT_CHUNK_SIZE,
@@ -142,6 +142,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const [inputCode, setInputCode] = useState('');   // guest 手动粘贴的房间链接
   const [showRoomDialog, setShowRoomDialog] = useState(false);
   const [showJoinDialog, setShowJoinDialog] = useState(false);
+  // 自定义房间号：双方约定一个短号码即可会合，无需传那串很长、易在转发渠道泄露的链接。
+  const [showRoomCodeDialog, setShowRoomCodeDialog] = useState(false);
+  const [roomCodeInput, setRoomCodeInput] = useState('');
+  const [sharedRoomCode, setSharedRoomCode] = useState(''); // host 创建后展示给对方的房间号
 
   // 端到端加密 / 身份验证状态
   const [secureStatus, setSecureStatus] = useState<SecureStatus>('idle');
@@ -1057,20 +1061,31 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       newPc.ondatachannel = (event) => setupDataChannel(event.channel);
     }
 
+    // host 发 offer：幂等（只发一次）。同时支持两种到场顺序——
+    // ① host 先入房、guest 后到（onPeerJoined）；② guest 先入房、host 后到（onJoined 时已满 2 人）。
+    // 后者正是「自定义房间号」流程需要的：双方都先知道房间号，谁先点都行。
+    let offerSent = false;
+    const sendOfferOnce = async () => {
+      if (!asHost || offerSent) return;
+      offerSent = true;
+      try {
+        const offer = await newPc.createOffer();
+        await newPc.setLocalDescription(offer);
+        signalingRef.current?.sendSignal({ kind: 'offer', sdp: newPc.localDescription });
+        log(t.chat.p2p.peerJoinedConnecting);
+        dev('sent offer');
+      } catch (err) {
+        offerSent = false; // 失败回滚，允许后续重试
+        log(t.chat.p2p.negotiationFailed, 'ERROR');
+        dev(`创建 offer 失败: ${err instanceof Error ? err.message : err}`);
+      }
+    };
     const signaling = new SignalingClient({
-      onPeerJoined: async () => {
-        if (!asHost) return; // 仅 host 主动发起 offer
-        try {
-          const offer = await newPc.createOffer();
-          await newPc.setLocalDescription(offer);
-          signalingRef.current?.sendSignal({ kind: 'offer', sdp: newPc.localDescription });
-          log(t.chat.p2p.peerJoinedConnecting);
-          dev('sent offer');
-        } catch (err) {
-          log(t.chat.p2p.negotiationFailed, 'ERROR');
-          dev(`创建 offer 失败: ${err instanceof Error ? err.message : err}`);
-        }
+      onJoined: (clientCount: number) => {
+        // 自己入房时房间已有对端（≥2 人）→ host 立即发 offer（对端先到的情形）。
+        if (asHost && clientCount >= 2) void sendOfferOnce();
       },
+      onPeerJoined: () => { void sendOfferOnce(); },
       onSignal: async (data) => {
         try {
           if (data?.kind === 'offer' && !asHost) {
@@ -1109,6 +1124,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           setDc(null);
           setConnectionStatus('disconnected');
           setRoomLink('');
+          setSharedRoomCode('');
           setShowRoomDialog(false);
           resetSecureState();
           clearFileTransferState();
@@ -1175,6 +1191,29 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     }
     await joinRoom(parsed.roomId, parsed.token);
   }, [inputCode, joinPairInput, joinRoom, log]);
+
+  // 自定义房间号：host 先开房（确定性派生 roomId/token），把短号码告诉对方。
+  const createRoomByCode = useCallback(async () => {
+    const norm = normalizeRoomCode(roomCodeInput);
+    if (!isValidRoomCode(norm)) { log(t.chat.p2p.roomCodeTooShort, 'WARN'); return; }
+    const { roomId, token } = await deriveRoomCredentials(norm);
+    setSharedRoomCode(norm);
+    setRoomLink('');                 // 房间号模式不展示长链接
+    setShowRoomCodeDialog(false);
+    setRoomCodeInput('');
+    setShowRoomDialog(true);         // 复用房间面板展示「房间号」与状态
+    await beginSession(true, roomId, token, 2);
+  }, [roomCodeInput, beginSession, log]);
+
+  // 自定义房间号：guest 用同一个号码加入（派生出与 host 相同的 roomId/token）。
+  const joinRoomByCode = useCallback(async () => {
+    const norm = normalizeRoomCode(roomCodeInput);
+    if (!isValidRoomCode(norm)) { log(t.chat.p2p.roomCodeTooShort, 'WARN'); return; }
+    const { roomId, token } = await deriveRoomCredentials(norm);
+    setShowRoomCodeDialog(false);
+    setRoomCodeInput('');
+    await beginSession(false, roomId, token);
+  }, [roomCodeInput, beginSession, log]);
 
   // 打开页面时若 URL 带房间参数（分享链接），自动加入；随后清掉 hash 里的 token 避免泄漏到历史
   useEffect(() => {
@@ -1324,7 +1363,9 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     setRole(null);
     setConnectionStatus('disconnected');
     setRoomLink('');
+    setSharedRoomCode('');
     setShowRoomDialog(false);
+    setShowRoomCodeDialog(false);
     // 彻底清除配对码会话设置（resetSecureState 故意保留它以便重连，断开时才清）
     pairRequiredRef.current = false;
     pairCodeRef.current = null;
@@ -1778,6 +1819,14 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         >
           {t.chat.p2p.joinRoomBtn}
         </button>
+        <button
+          style={styles.btnSecondary}
+          onClick={() => { setRoomCodeInput(''); setShowRoomCodeDialog(true); }}
+          disabled={connectionStatus !== 'disconnected'}
+          title={t.chat.p2p.roomCodeTitle}
+        >
+          {t.chat.p2p.roomCodeBtn}
+        </button>
         {connectionStatus !== 'disconnected' && (
           <button style={styles.btnDanger} onClick={disconnect}>
             ❌ {t.chat.disconnect}
@@ -1786,7 +1835,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       </div>
 
       {/* 房间分享（host）：内联卡片，全部在同一页面内完成；连接建立后(connected)自动消失，无弹窗。 */}
-      {roomLink && showRoomDialog && connectionStatus !== 'connected' && (
+      {(roomLink || sharedRoomCode) && showRoomDialog && connectionStatus !== 'connected' && (
         <div style={{ padding: '12px', background: '#eef6ff', borderTop: '1px solid #cfe3fb' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <strong>{t.chat.p2p.roomCreatedHeading}</strong>
@@ -1794,16 +1843,31 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
               {connectionStatus === 'connecting' ? t.chat.p2p.establishingEncrypted : t.chat.p2p.waitingPeerJoin}
             </span>
           </div>
-          <input
-            type="text"
-            style={{ width: '100%', margin: '4px 0', padding: '8px 10px', border: '1px solid #cfe3fb', borderRadius: 6, fontFamily: 'monospace', fontSize: 12, boxSizing: 'border-box' }}
-            value={roomLink}
-            readOnly
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
-            {t.chat.p2p.roomLinkWarning}
-          </p>
+          {sharedRoomCode ? (
+            <>
+              <div style={{ fontSize: 12, color: '#555', marginBottom: 4 }}>{t.chat.p2p.roomCodeShareLabel}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '2px 0 6px' }}>
+                <code style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, color: '#2c5fa4' }}>{sharedRoomCode}</code>
+                <button style={{ ...styles.btnSecondary, padding: '4px 10px', fontSize: 12 }} onClick={() => copyToClipboard(sharedRoomCode)}>{t.chat.p2p.copyLink}</button>
+              </div>
+              <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
+                {t.chat.p2p.roomCodeShareHint}
+              </p>
+            </>
+          ) : (
+            <>
+              <input
+                type="text"
+                style={{ width: '100%', margin: '4px 0', padding: '8px 10px', border: '1px solid #cfe3fb', borderRadius: 6, fontFamily: 'monospace', fontSize: 12, boxSizing: 'border-box' }}
+                value={roomLink}
+                readOnly
+                onFocus={(e) => e.currentTarget.select()}
+              />
+              <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
+                {t.chat.p2p.roomLinkWarning}
+              </p>
+            </>
+          )}
           {pairingCode && (
             <div style={{ margin: '8px 0', padding: '8px 10px', background: '#eef9f1', border: '1px solid #cde9d6', borderRadius: 6 }}>
               <div style={{ fontSize: 12, color: '#555', marginBottom: 4 }}>{t.chat.p2p.pairCodeLabel}</div>
@@ -1815,7 +1879,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
             </div>
           )}
           <div style={{ display: 'flex', gap: 10 }}>
-            <button style={styles.btn} onClick={() => copyToClipboard(roomLink)}>{t.chat.p2p.copyLink}</button>
+            {roomLink && <button style={styles.btn} onClick={() => copyToClipboard(roomLink)}>{t.chat.p2p.copyLink}</button>}
             <button style={styles.btnSecondary} onClick={() => setShowRoomDialog(false)}>{t.chat.p2p.collapse}</button>
           </div>
         </div>
@@ -1976,6 +2040,37 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       </div>
 
       {/* 加入房间对话框（guest）：手动粘贴房间链接（通常直接打开链接即可，无需这一步） */}
+      {/* 自定义房间号弹窗：双方约定一个短号码——一方「创建」、另一方「加入」。 */}
+      {showRoomCodeDialog && (
+        <div style={styles.modal}>
+          <div style={styles.modalContent}>
+            <h3>{t.chat.p2p.roomCodeDialogTitle}</h3>
+            <p style={{ color: '#666', fontSize: 14 }}>{t.chat.p2p.roomCodeDialogBody}</p>
+            <input
+              style={{ width: '100%', padding: '10px 12px', border: '2px solid #e9ecef', borderRadius: 8, fontFamily: 'monospace', fontSize: 16, boxSizing: 'border-box', letterSpacing: 1 }}
+              value={roomCodeInput}
+              onChange={(e) => setRoomCodeInput(e.target.value)}
+              placeholder={t.chat.p2p.roomCodePlaceholder}
+              autoFocus
+            />
+            <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '10px 0 0' }}>
+              {t.chat.p2p.roomCodeSecurityHint}
+            </p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: 14, flexWrap: 'wrap' }}>
+              <button style={styles.btnSecondary} onClick={() => { setShowRoomCodeDialog(false); setRoomCodeInput(''); }}>
+                {t.chat.p2p.cancel}
+              </button>
+              <button style={styles.btnSecondary} onClick={() => void joinRoomByCode()}>
+                {t.chat.p2p.roomCodeJoinBtn}
+              </button>
+              <button style={styles.btn} onClick={() => void createRoomByCode()}>
+                {t.chat.p2p.roomCodeCreateBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showJoinDialog && (
         <div style={styles.modal}>
           <div style={styles.modalContent}>

@@ -39,6 +39,42 @@ export function generateRoomCredentials(): { roomId: string; token: string } {
   return { roomId: rand(10), token: rand(32) };
 }
 
+/** 自定义房间号最小长度（降低被随意猜中的概率；机密性仍靠 SAS/配对码核对，见下）。 */
+export const MIN_ROOM_CODE_LENGTH = 6;
+
+/** 归一化用户输入的房间号：去首尾空白、合并内部空白、转小写——两端约定同一个号即可连上。 */
+export function normalizeRoomCode(code: string): string {
+  return (code || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export function isValidRoomCode(code: string): boolean {
+  return normalizeRoomCode(code).length >= MIN_ROOM_CODE_LENGTH;
+}
+
+function toHex(buf: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 由「双方约定的房间号」**确定性派生** roomId 与 token，使两人只交换一个短号码即可会合，
+ * 无需传那串很长、易在转发渠道泄露的房间链接。
+ *
+ * 安全说明（重要）：派生用的是公开 KDF（SHA-256 + 域分隔），故 token 的保密性 == 房间号本身的熵。
+ * 短房间号是**可猜测**的——它只是「会合标识」，不是抗中间人的机密。真正阻止中间人读取内容的，
+ * 是握手后强制的**安全码(SAS)带外核对 / 配对码**（见 SimpleP2PChat 的内容门禁，未核对前不放行任何内容）。
+ * 因此用自定义房间号时，请务必核对安全码或启用配对码。
+ */
+export async function deriveRoomCredentials(code: string): Promise<{ roomId: string; token: string }> {
+  const norm = normalizeRoomCode(code);
+  const enc = new TextEncoder();
+  const [roomDigest, tokenDigest] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(`veilconnect-room-id|v1|${norm}`)),
+    crypto.subtle.digest('SHA-256', enc.encode(`veilconnect-room-token|v1|${norm}`))
+  ]);
+  // roomId 取摘要前若干字节（避免与 token 同源可逆推），token 用完整 64 hex（满足服务器 16-128 长度）。
+  return { roomId: `rc-${toHex(roomDigest).slice(0, 20)}`, token: toHex(tokenDigest) };
+}
+
 export class SignalingClient {
   private ws: WebSocket | null = null;
   private handlers: SignalingHandlers;
