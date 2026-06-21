@@ -69,6 +69,8 @@ interface ReceivingFile {
 
 const FILE_BACKPRESSURE_HIGH = 1024 * 1024;
 const FILE_BACKPRESSURE_LOW = 256 * 1024;
+const FILE_BACKPRESSURE_TIMEOUT_MS = 120_000;
+const FILE_BACKPRESSURE_POLL_MS = 100;
 
 function displayNickname(nickname: string | undefined | null): string {
   const name = (nickname || '').trim();
@@ -95,17 +97,43 @@ function waitForDataChannelBackpressure(channel: RTCDataChannel): Promise<void> 
   if (channel.bufferedAmount <= FILE_BACKPRESSURE_HIGH) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const previous = channel.onbufferedamountlow;
-    channel.bufferedAmountLowThreshold = FILE_BACKPRESSURE_LOW;
-    const timer = window.setTimeout(() => {
+    let done = false;
+    let poll: number | null = null;
+    let timer: number | null = null;
+
+    const cleanup = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      if (poll !== null) window.clearInterval(poll);
       channel.onbufferedamountlow = previous;
-      reject(new Error('file transfer backpressure timeout'));
-    }, 15_000);
-    channel.onbufferedamountlow = (event) => {
-      window.clearTimeout(timer);
-      channel.onbufferedamountlow = previous;
-      if (typeof previous === 'function') previous.call(channel, event);
+    };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      cleanup();
       resolve();
     };
+    const fail = (message: string) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error(message));
+    };
+    const check = () => {
+      if (channel.readyState !== 'open') {
+        fail('file transfer channel closed');
+        return;
+      }
+      if (channel.bufferedAmount <= FILE_BACKPRESSURE_LOW) finish();
+    };
+
+    channel.bufferedAmountLowThreshold = FILE_BACKPRESSURE_LOW;
+    channel.onbufferedamountlow = (event) => {
+      if (typeof previous === 'function') previous.call(channel, event);
+      finish();
+    };
+    poll = window.setInterval(check, FILE_BACKPRESSURE_POLL_MS);
+    timer = window.setTimeout(() => fail('file transfer backpressure timeout'), FILE_BACKPRESSURE_TIMEOUT_MS);
+    check();
   });
 }
 
@@ -1057,6 +1085,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       await sendEncryptedControl({ c: 'file_complete', id }, dc).catch(() => undefined);
       updateFileTransfer(id, { status: 'completed', progress: 1 });
     } catch (err) {
+      await sendEncryptedControl({ c: 'file_cancel', id, reason: 'failed' }, dc).catch(() => undefined);
       updateFileTransfer(id, { status: 'failed', error: t.chat.p2p.file.failed });
       log(t.chat.p2p.file.offerFailed, 'ERROR');
       dev(`file send failed: ${err instanceof Error ? err.message : err}`);
