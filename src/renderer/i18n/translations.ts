@@ -3,7 +3,7 @@ export interface Translations {
   appTitle: string;
   appSubtitle: string;
   appDescription: string;
-  
+
   // 欢迎界面
   welcome: {
     title: string;
@@ -19,7 +19,7 @@ export interface Translations {
     };
     startButton: string;
   };
-  
+
   // 身份设置
   identity: {
     generateButton: string;
@@ -34,7 +34,7 @@ export interface Translations {
     publicKey: string;
     privateKey: string;
   };
-  
+
   // 加密功能
   encryption: {
     title: string;
@@ -48,7 +48,7 @@ export interface Translations {
     pleaseGenerateIdentity: string;
     pleaseEnterText: string;
   };
-  
+
   // 系统状态
   system: {
     title: string;
@@ -58,7 +58,7 @@ export interface Translations {
     uptime: string;
     seconds: string;
   };
-  
+
   // 功能演示
   features: {
     title: string;
@@ -83,14 +83,14 @@ export interface Translations {
       button: string;
     };
   };
-  
+
   // 日志系统
   log: {
     title: string;
     clearButton: string;
     cleared: string;
   };
-  
+
   // 设置
   settings: {
     title: string;
@@ -98,7 +98,7 @@ export interface Translations {
     theme: string;
     notifications: string;
   };
-  
+
   // 通用
   common: {
     save: string;
@@ -115,7 +115,7 @@ export interface Translations {
     warning: string;
     info: string;
   };
-  
+
   // 成功完成界面
   completion: {
     title: string;
@@ -225,6 +225,26 @@ export interface Translations {
       sasConfirmedToast: string;
       setNicknamePrompt: string;
       clearDataConfirm: string;
+      // —— 文件 / 图片传输 ——
+      file: {
+        attachTitle: string;
+        busy: string;
+        tooLarge: string;
+        readFailed: string;
+        offerFailed: string;
+        sending: string;
+        receiving: string;
+        completed: string;
+        failed: string;
+        cancelled: string;
+        verifyFailed: string;
+        incoming: string;
+        sent: string;
+        received: string;
+        download: string;
+        cancel: string;
+        imageAlt: string;
+      };
     };
   };
 }
@@ -234,7 +254,7 @@ export const translations: Record<string, Translations> = {
     appTitle: 'VeilConnect',
     appSubtitle: 'P2P加密聊天软件',
     appDescription: '基于P2P技术的端到端加密聊天应用，不依赖中心服务器，确保您的通信隐私和安全。',
-    
+
     welcome: {
       title: 'VeilConnect',
       subtitle: 'P2P加密聊天软件',
@@ -249,7 +269,7 @@ export const translations: Record<string, Translations> = {
       },
       startButton: '开始使用'
     },
-    
+
     identity: {
       generateButton: '生成新身份',
       clearButton: '清除身份',
@@ -263,7 +283,7 @@ export const translations: Record<string, Translations> = {
       publicKey: '公钥:',
       privateKey: '私钥:'
     },
-    
+
     encryption: {
       title: '🔐 加密测试',
       inputPlaceholder: '输入要加密的文本',
@@ -276,7 +296,7 @@ export const translations: Record<string, Translations> = {
       pleaseGenerateIdentity: '请先生成身份',
       pleaseEnterText: '请输入要加密的文本'
     },
-    
+
     system: {
       title: '📊 系统状态',
       identityStatus: '身份状态:',
@@ -285,7 +305,7 @@ export const translations: Record<string, Translations> = {
       uptime: '运行时间:',
       seconds: '秒'
     },
-    
+
     features: {
       title: '🚀 核心功能演示',
       encryptionDemo: {
@@ -309,20 +329,20 @@ export const translations: Record<string, Translations> = {
         button: '演示P2P'
       }
     },
-    
+
     log: {
       title: '📝 系统日志',
       clearButton: '清除日志',
       cleared: '日志已清除'
     },
-    
+
     settings: {
       title: '⚙️ 设置',
       language: '语言',
       theme: '主题',
       notifications: '通知'
     },
-    
+
     common: {
       save: '保存',
       cancel: '取消',
@@ -338,7 +358,7 @@ export const translations: Record<string, Translations> = {
       warning: '警告',
       info: '信息'
     },
-    
+
     completion: {
       title: '身份创建成功！',
       description: '🎉 恭喜！您已成功创建VeilConnect身份。现在您可以与其他用户建立安全的P2P连接了。',
@@ -444,16 +464,35 @@ export const translations: Record<string, Translations> = {
         nicknameUpdateFailed: '昵称更新失败',
         sasConfirmedToast: '已确认安全码一致，可以开始聊天',
         setNicknamePrompt: '设置你的昵称（对方会看到）：',
-        clearDataConfirm: '清除本设备的全部本地数据？\n\n将删除本浏览器内保存的加密身份与所有本地数据，且不可恢复（服务器本就不存任何数据）。清除后回到「设置口令」从头开始。'
+        clearDataConfirm: '清除本设备的全部本地数据？\n\n将删除本浏览器内保存的加密身份与所有本地数据，且不可恢复（服务器本就不存任何数据）。清除后回到「设置口令」从头开始。',
+        file: {
+          attachTitle: '发送文件或图片',
+          busy: '已有文件正在发送，请等当前文件传完再发下一个',
+          tooLarge: '文件超过 100 MB 上限，暂不支持',
+          readFailed: '读取文件失败',
+          offerFailed: '发送文件失败',
+          sending: '发送中',
+          receiving: '接收中',
+          completed: '已完成',
+          failed: '传输失败',
+          cancelled: '已取消',
+          verifyFailed: '文件校验失败（大小或哈希不符），已丢弃',
+          incoming: '正在接收文件…',
+          sent: '已发送',
+          received: '已接收',
+          download: '下载',
+          cancel: '取消',
+          imageAlt: '收到的图片'
+        }
       }
     }
   },
-  
+
   'en': {
     appTitle: 'VeilConnect',
     appSubtitle: 'P2P Encrypted Chat',
     appDescription: 'A P2P end-to-end encrypted chat application that ensures your communication privacy and security without relying on central servers.',
-    
+
     welcome: {
       title: 'VeilConnect',
       subtitle: 'P2P Encrypted Chat',
@@ -468,7 +507,7 @@ export const translations: Record<string, Translations> = {
       },
       startButton: 'Get Started'
     },
-    
+
     identity: {
       generateButton: 'Generate New Identity',
       clearButton: 'Clear Identity',
@@ -482,7 +521,7 @@ export const translations: Record<string, Translations> = {
       publicKey: 'Public Key:',
       privateKey: 'Private Key:'
     },
-    
+
     encryption: {
       title: '🔐 Encryption Test',
       inputPlaceholder: 'Enter text to encrypt',
@@ -495,7 +534,7 @@ export const translations: Record<string, Translations> = {
       pleaseGenerateIdentity: 'Please generate identity first',
       pleaseEnterText: 'Please enter text to encrypt'
     },
-    
+
     system: {
       title: '📊 System Status',
       identityStatus: 'Identity Status:',
@@ -504,7 +543,7 @@ export const translations: Record<string, Translations> = {
       uptime: 'Uptime:',
       seconds: 'seconds'
     },
-    
+
     features: {
       title: '🚀 Core Feature Demo',
       encryptionDemo: {
@@ -528,20 +567,20 @@ export const translations: Record<string, Translations> = {
         button: 'Demo P2P'
       }
     },
-    
+
     log: {
       title: '📝 System Log',
       clearButton: 'Clear Log',
       cleared: 'Log cleared'
     },
-    
+
     settings: {
       title: '⚙️ Settings',
       language: 'Language',
       theme: 'Theme',
       notifications: 'Notifications'
     },
-    
+
     common: {
       save: 'Save',
       cancel: 'Cancel',
@@ -557,7 +596,7 @@ export const translations: Record<string, Translations> = {
       warning: 'Warning',
       info: 'Info'
     },
-    
+
     completion: {
       title: 'Identity Created Successfully!',
       description: '🎉 Congratulations! You have successfully created your VeilConnect identity. You can now establish secure P2P connections with other users.',
@@ -663,16 +702,35 @@ export const translations: Record<string, Translations> = {
         nicknameUpdateFailed: 'Failed to update nickname',
         sasConfirmedToast: 'Safety code confirmed as matching — you can start chatting',
         setNicknamePrompt: 'Set your nickname (visible to your peer):',
-        clearDataConfirm: 'Clear all local data on this device?\n\nThis deletes the encrypted identity and all local data saved in this browser, and cannot be undone (the server stores nothing anyway). Afterwards you return to “Set passphrase” and start over.'
+        clearDataConfirm: 'Clear all local data on this device?\n\nThis deletes the encrypted identity and all local data saved in this browser, and cannot be undone (the server stores nothing anyway). Afterwards you return to “Set passphrase” and start over.',
+        file: {
+          attachTitle: 'Send a file or photo',
+          busy: 'A file is already being sent — wait for it to finish before sending another',
+          tooLarge: 'File exceeds the 100 MB limit',
+          readFailed: 'Failed to read the file',
+          offerFailed: 'Failed to send the file',
+          sending: 'Sending',
+          receiving: 'Receiving',
+          completed: 'Completed',
+          failed: 'Transfer failed',
+          cancelled: 'Cancelled',
+          verifyFailed: 'File verification failed (size or hash mismatch); discarded',
+          incoming: 'Receiving a file…',
+          sent: 'Sent',
+          received: 'Received',
+          download: 'Download',
+          cancel: 'Cancel',
+          imageAlt: 'Received image'
+        }
       }
     }
   },
-  
+
   'ja': {
     appTitle: 'VeilConnect',
     appSubtitle: 'P2P暗号化チャット',
     appDescription: '中央サーバーに依存せず、通信のプライバシーとセキュリティを確保するP2Pエンドツーエンド暗号化チャットアプリケーション。',
-    
+
     welcome: {
       title: 'VeilConnect',
       subtitle: 'P2P暗号化チャット',
@@ -687,7 +745,7 @@ export const translations: Record<string, Translations> = {
       },
       startButton: '開始'
     },
-    
+
     identity: {
       generateButton: '新しいアイデンティティを生成',
       clearButton: 'アイデンティティをクリア',
@@ -701,7 +759,7 @@ export const translations: Record<string, Translations> = {
       publicKey: '公開鍵:',
       privateKey: '秘密鍵:'
     },
-    
+
     encryption: {
       title: '🔐 暗号化テスト',
       inputPlaceholder: '暗号化するテキストを入力',
@@ -714,7 +772,7 @@ export const translations: Record<string, Translations> = {
       pleaseGenerateIdentity: '最初にアイデンティティを生成してください',
       pleaseEnterText: '暗号化するテキストを入力してください'
     },
-    
+
     system: {
       title: '📊 システム状態',
       identityStatus: 'アイデンティティ状態:',
@@ -723,7 +781,7 @@ export const translations: Record<string, Translations> = {
       uptime: '稼働時間:',
       seconds: '秒'
     },
-    
+
     features: {
       title: '🚀 主要機能デモ',
       encryptionDemo: {
@@ -747,20 +805,20 @@ export const translations: Record<string, Translations> = {
         button: 'P2Pデモ'
       }
     },
-    
+
     log: {
       title: '📝 システムログ',
       clearButton: 'ログをクリア',
       cleared: 'ログがクリアされました'
     },
-    
+
     settings: {
       title: '⚙️ 設定',
       language: '言語',
       theme: 'テーマ',
       notifications: '通知'
     },
-    
+
     common: {
       save: '保存',
       cancel: 'キャンセル',
@@ -776,7 +834,7 @@ export const translations: Record<string, Translations> = {
       warning: '警告',
       info: '情報'
     },
-    
+
     completion: {
       title: 'アイデンティティ作成成功！',
       description: '🎉 おめでとうございます！VeilConnectアイデンティティの作成に成功しました。他のユーザーと安全なP2P接続を確立できるようになりました。',
@@ -882,16 +940,35 @@ export const translations: Record<string, Translations> = {
         nicknameUpdateFailed: 'ニックネームの更新に失敗しました',
         sasConfirmedToast: '安全コードの一致を確認しました。チャットを開始できます',
         setNicknamePrompt: 'ニックネームを設定してください（相手に表示されます）：',
-        clearDataConfirm: 'この端末のすべてのローカルデータを消去しますか？\n\nこのブラウザに保存された暗号化身元とすべてのローカルデータを削除し、元に戻せません（サーバーには元々何も保存されていません）。消去後は「パスフレーズを設定」に戻って最初からやり直します。'
+        clearDataConfirm: 'この端末のすべてのローカルデータを消去しますか？\n\nこのブラウザに保存された暗号化身元とすべてのローカルデータを削除し、元に戻せません（サーバーには元々何も保存されていません）。消去後は「パスフレーズを設定」に戻って最初からやり直します。',
+        file: {
+          attachTitle: 'ファイルまたは写真を送信',
+          busy: '送信中のファイルがあります。完了してから次を送ってください',
+          tooLarge: 'ファイルが 100 MB の上限を超えています',
+          readFailed: 'ファイルの読み込みに失敗しました',
+          offerFailed: 'ファイルの送信に失敗しました',
+          sending: '送信中',
+          receiving: '受信中',
+          completed: '完了',
+          failed: '転送失敗',
+          cancelled: 'キャンセル済み',
+          verifyFailed: 'ファイル検証に失敗（サイズまたはハッシュ不一致）。破棄しました',
+          incoming: 'ファイルを受信中…',
+          sent: '送信済み',
+          received: '受信済み',
+          download: 'ダウンロード',
+          cancel: 'キャンセル',
+          imageAlt: '受信した画像'
+        }
       }
     }
   },
-  
+
   'es': {
     appTitle: 'VeilConnect',
     appSubtitle: 'Chat P2P Encriptado',
     appDescription: 'Una aplicación de chat P2P con cifrado de extremo a extremo que garantiza la privacidad y seguridad de tu comunicación sin depender de servidores centrales.',
-    
+
     welcome: {
       title: 'VeilConnect',
       subtitle: 'Chat P2P Encriptado',
@@ -906,7 +983,7 @@ export const translations: Record<string, Translations> = {
       },
       startButton: 'Comenzar'
     },
-    
+
     identity: {
       generateButton: 'Generar Nueva Identidad',
       clearButton: 'Limpiar Identidad',
@@ -920,7 +997,7 @@ export const translations: Record<string, Translations> = {
       publicKey: 'Clave Pública:',
       privateKey: 'Clave Privada:'
     },
-    
+
     encryption: {
       title: '🔐 Prueba de Cifrado',
       inputPlaceholder: 'Ingresa texto para cifrar',
@@ -933,7 +1010,7 @@ export const translations: Record<string, Translations> = {
       pleaseGenerateIdentity: 'Por favor genera una identidad primero',
       pleaseEnterText: 'Por favor ingresa texto para cifrar'
     },
-    
+
     system: {
       title: '📊 Estado del Sistema',
       identityStatus: 'Estado de Identidad:',
@@ -942,7 +1019,7 @@ export const translations: Record<string, Translations> = {
       uptime: 'Tiempo Activo:',
       seconds: 'segundos'
     },
-    
+
     features: {
       title: '🚀 Demo de Características Principales',
       encryptionDemo: {
@@ -966,20 +1043,20 @@ export const translations: Record<string, Translations> = {
         button: 'Demo P2P'
       }
     },
-    
+
     log: {
       title: '📝 Registro del Sistema',
       clearButton: 'Limpiar Registro',
       cleared: 'Registro limpiado'
     },
-    
+
     settings: {
       title: '⚙️ Configuración',
       language: 'Idioma',
       theme: 'Tema',
       notifications: 'Notificaciones'
     },
-    
+
     common: {
       save: 'Guardar',
       cancel: 'Cancelar',
@@ -995,7 +1072,7 @@ export const translations: Record<string, Translations> = {
       warning: 'Advertencia',
       info: 'Información'
     },
-    
+
     completion: {
       title: '¡Identidad Creada Exitosamente!',
       description: '🎉 ¡Felicitaciones! Has creado exitosamente tu identidad VeilConnect. Ahora puedes establecer conexiones P2P seguras con otros usuarios.',
@@ -1101,7 +1178,26 @@ export const translations: Record<string, Translations> = {
         nicknameUpdateFailed: 'No se pudo actualizar el apodo',
         sasConfirmedToast: 'Código de seguridad confirmado como coincidente: puedes empezar a chatear',
         setNicknamePrompt: 'Configura tu apodo (visible para tu par):',
-        clearDataConfirm: '¿Borrar todos los datos locales de este dispositivo?\n\nEsto elimina la identidad cifrada y todos los datos locales guardados en este navegador, y no se puede deshacer (el servidor no almacena nada de todos modos). Después vuelves a «Establecer contraseña» y empiezas de nuevo.'
+        clearDataConfirm: '¿Borrar todos los datos locales de este dispositivo?\n\nEsto elimina la identidad cifrada y todos los datos locales guardados en este navegador, y no se puede deshacer (el servidor no almacena nada de todos modos). Después vuelves a «Establecer contraseña» y empiezas de nuevo.',
+        file: {
+          attachTitle: 'Enviar un archivo o foto',
+          busy: 'Ya se está enviando un archivo; espera a que termine antes de enviar otro',
+          tooLarge: 'El archivo supera el límite de 100 MB',
+          readFailed: 'No se pudo leer el archivo',
+          offerFailed: 'No se pudo enviar el archivo',
+          sending: 'Enviando',
+          receiving: 'Recibiendo',
+          completed: 'Completado',
+          failed: 'Transferencia fallida',
+          cancelled: 'Cancelado',
+          verifyFailed: 'Verificación del archivo fallida (tamaño o hash no coinciden); descartado',
+          incoming: 'Recibiendo un archivo…',
+          sent: 'Enviado',
+          received: 'Recibido',
+          download: 'Descargar',
+          cancel: 'Cancelar',
+          imageAlt: 'Imagen recibida'
+        }
       }
     }
   }

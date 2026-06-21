@@ -156,7 +156,7 @@ class SignalingServer {
         this.app.use((req, res, next) => {
             res.setHeader('Content-Security-Policy',
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-                "img-src 'self' data:; font-src 'self' data:; connect-src 'self' https: wss: ws:; " +
+                "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: wss: ws:; " +
                 "worker-src 'self' blob:; base-uri 'self'; form-action 'self'");
             res.setHeader('X-Content-Type-Options', 'nosniff');
             res.setHeader('Referrer-Policy', 'no-referrer');

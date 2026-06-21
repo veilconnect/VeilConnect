@@ -1,6 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from '../i18n/useTranslation';
 import { SignalingClient, generateRoomCredentials } from '../../web/signaling/SignalingClient';
+import {
+  ChunkAssembler,
+  DEFAULT_CHUNK_SIZE,
+  FileOfferMeta,
+  MAX_FILE_SIZE,
+  chunkCount,
+  chunkRange,
+  decryptChunk,
+  encryptChunk,
+  formatBytes,
+  generateFileKey,
+  importFileKey,
+  isImageMime,
+  sha256Hex
+} from '../../web/fileTransfer/fileTransfer';
 
 /** 从链接或裸 hash 解析房间参数：支持完整 URL（含 #room=..&t=..）或纯 'room=..&t=..'。 */
 function parseRoomLink(input: string): { roomId: string; token: string } | null {
@@ -30,6 +45,53 @@ interface SelfIdentity {
 }
 
 type SecureStatus = 'idle' | 'pending' | 'secure' | 'failed';
+
+type FileTransferStatus = 'sending' | 'receiving' | 'completed' | 'failed' | 'cancelled';
+type FileTransferDirection = 'sent' | 'received';
+
+interface FileTransferView {
+  id: string;
+  direction: FileTransferDirection;
+  name: string;
+  size: number;
+  mime: string;
+  progress: number;
+  status: FileTransferStatus;
+  url?: string;
+  error?: string;
+}
+
+interface ReceivingFile {
+  meta: FileOfferMeta;
+  key: CryptoKey;
+  assembler: ChunkAssembler;
+}
+
+const FILE_BACKPRESSURE_HIGH = 1024 * 1024;
+const FILE_BACKPRESSURE_LOW = 256 * 1024;
+
+function randomTransferId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function waitForDataChannelBackpressure(channel: RTCDataChannel): Promise<void> {
+  if (channel.bufferedAmount <= FILE_BACKPRESSURE_HIGH) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const previous = channel.onbufferedamountlow;
+    channel.bufferedAmountLowThreshold = FILE_BACKPRESSURE_LOW;
+    const timer = window.setTimeout(() => {
+      channel.onbufferedamountlow = previous;
+      reject(new Error('file transfer backpressure timeout'));
+    }, 15_000);
+    channel.onbufferedamountlow = (event) => {
+      window.clearTimeout(timer);
+      channel.onbufferedamountlow = previous;
+      if (typeof previous === 'function') previous.call(channel, event);
+      resolve();
+    };
+  });
+}
 
 /**
  * 安全码（safety number / SAS）：基于双方「长期 Ed25519 身份公钥」派生，
@@ -115,10 +177,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const [dc, setDc] = useState<RTCDataChannel | null>(null);
   const [role, setRole] = useState<'host' | 'guest' | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
-  
+
   // 聊天状态
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageInput, setMessageInput] = useState('');
+  const [fileTransfers, setFileTransfers] = useState<FileTransferView[]>([]);
 
   // 信令房间状态
   const [roomLink, setRoomLink] = useState('');     // host 建房后生成的分享链接
@@ -150,6 +213,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const signalingRef = useRef<SignalingClient | null>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const receivingFilesRef = useRef<Map<string, ReceivingFile>>(new Map());
+  const pendingFileChunksRef = useRef<Map<string, any[]>>(new Map());
+  const cancelledFilesRef = useRef<Set<string>>(new Set());
+  const objectUrlsRef = useRef<Set<string>>(new Set());
   const iceReadyRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
   if (!iceReadyRef.current) {
     let resolve!: () => void;
@@ -299,6 +367,43 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     setMessages(prev => [...prev, newMessage]);
   }, []);
 
+  const updateFileTransfer = useCallback((id: string, patch: Partial<FileTransferView>) => {
+    setFileTransfers(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item));
+  }, []);
+
+  const upsertFileTransfer = useCallback((transfer: FileTransferView) => {
+    setFileTransfers(prev => {
+      const idx = prev.findIndex(item => item.id === transfer.id);
+      if (idx === -1) return [...prev, transfer];
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...transfer };
+      return next;
+    });
+  }, []);
+
+  const hasActiveFileTransfer = useCallback(() => (
+    fileTransfers.some(item => item.status === 'sending' || item.status === 'receiving')
+  ), [fileTransfers]);
+
+  const clearFileTransferState = useCallback(() => {
+    receivingFilesRef.current.clear();
+    pendingFileChunksRef.current.clear();
+    cancelledFilesRef.current.clear();
+    for (const url of objectUrlsRef.current) URL.revokeObjectURL(url);
+    objectUrlsRef.current.clear();
+    setFileTransfers([]);
+  }, []);
+
+  const sendEncryptedControl = useCallback(async (obj: Record<string, unknown>, channel: RTCDataChannel = dc as RTCDataChannel) => {
+    const peerId = peerIdRef.current;
+    if (!peerId || !channel || channel.readyState !== 'open') {
+      throw new Error('secure channel unavailable');
+    }
+    const api = (window as any).electronAPI;
+    const { type, body } = await api.ratchet.encrypt(peerId, JSON.stringify(obj));
+    channel.send(JSON.stringify({ type: 'cipher', payload: { t: type, b: body } }));
+  }, [dc]);
+
   // 滚动到底部
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -373,6 +478,114 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     }
   }, [log, dev, ensureBundle]);
 
+  const handleFileCancel = useCallback((id: string) => {
+    receivingFilesRef.current.delete(id);
+    pendingFileChunksRef.current.delete(id);
+    cancelledFilesRef.current.add(id);
+    updateFileTransfer(id, { status: 'cancelled', error: t.chat.p2p.file.cancelled });
+  }, [t.chat.p2p.file.cancelled, updateFileTransfer]);
+
+  const processFileChunk = useCallback(async (id: string, chunk: any, rx: ReceivingFile) => {
+    if (cancelledFilesRef.current.has(id)) return;
+    try {
+      const plain = await decryptChunk(rx.key, chunk.iv, chunk.data);
+      const fresh = rx.assembler.add(chunk.seq, plain);
+      if (!fresh) return;
+      updateFileTransfer(id, { progress: rx.assembler.progress });
+      if (!rx.assembler.isComplete()) return;
+
+      const assembled = rx.assembler.assemble();
+      const okSize = assembled.byteLength === rx.meta.size;
+      const okHash = (await sha256Hex(assembled)) === rx.meta.hash;
+      receivingFilesRef.current.delete(id);
+      pendingFileChunksRef.current.delete(id);
+      if (!okSize || !okHash) {
+        updateFileTransfer(id, {
+          status: 'failed',
+          progress: 1,
+          error: t.chat.p2p.file.verifyFailed
+        });
+        log(t.chat.p2p.file.verifyFailed, 'ERROR');
+        return;
+      }
+
+      const blob = new Blob([assembled], { type: rx.meta.mime || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      objectUrlsRef.current.add(url);
+      updateFileTransfer(id, {
+        status: 'completed',
+        progress: 1,
+        url
+      });
+    } catch (err) {
+      receivingFilesRef.current.delete(id);
+      pendingFileChunksRef.current.delete(id);
+      updateFileTransfer(id, {
+        status: 'failed',
+        error: t.chat.p2p.file.failed
+      });
+      dev(`file chunk failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }, [dev, log, t.chat.p2p.file.failed, t.chat.p2p.file.verifyFailed, updateFileTransfer]);
+
+  const handleFileOffer = useCallback(async (meta: FileOfferMeta) => {
+    try {
+      if (!meta || typeof meta.id !== 'string' || typeof meta.name !== 'string' ||
+          typeof meta.size !== 'number' || typeof meta.hash !== 'string' ||
+          typeof meta.key !== 'string' || typeof meta.totalChunks !== 'number') {
+        throw new Error('invalid file offer');
+      }
+      if (meta.size > MAX_FILE_SIZE) {
+        throw new Error('file too large');
+      }
+      if (hasActiveFileTransfer()) {
+        void sendEncryptedControl({ c: 'file_cancel', id: meta.id, reason: 'busy' }).catch(() => undefined);
+        log(t.chat.p2p.file.busy, 'WARN');
+        return;
+      }
+      const key = await importFileKey(meta.key);
+      receivingFilesRef.current.set(meta.id, {
+        meta,
+        key,
+        assembler: new ChunkAssembler(meta.totalChunks)
+      });
+      upsertFileTransfer({
+        id: meta.id,
+        direction: 'received',
+        name: meta.name,
+        size: meta.size,
+        mime: meta.mime || 'application/octet-stream',
+        progress: 0,
+        status: 'receiving'
+      });
+      log(`${t.chat.p2p.file.incoming} ${meta.name} (${formatBytes(meta.size)})`);
+      const queued = pendingFileChunksRef.current.get(meta.id) || [];
+      pendingFileChunksRef.current.delete(meta.id);
+      const rx = receivingFilesRef.current.get(meta.id);
+      if (rx) {
+        for (const chunk of queued) void processFileChunk(meta.id, chunk, rx);
+      }
+    } catch (err) {
+      log(t.chat.p2p.file.offerFailed, 'ERROR');
+      dev(`file offer failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }, [dev, hasActiveFileTransfer, log, processFileChunk, sendEncryptedControl, t.chat.p2p.file.busy, t.chat.p2p.file.incoming, t.chat.p2p.file.offerFailed, upsertFileTransfer]);
+
+  const handleFileChunk = useCallback(async (chunk: any) => {
+    const id = chunk?.id;
+    if (typeof id !== 'string' || cancelledFilesRef.current.has(id)) return;
+    const rx = receivingFilesRef.current.get(id);
+    if (!rx) {
+      const queued = pendingFileChunksRef.current.get(id) || [];
+      if (queued.length < 2048) {
+        queued.push(chunk);
+        pendingFileChunksRef.current.set(id, queued);
+      }
+      return;
+    }
+    await processFileChunk(id, chunk, rx);
+  }, [processFileChunk]);
+
   // 收到对端身份包：强制验证身份绑定 + ratchet 密钥签名，任一失败即视为中间人攻击并断开
   const handleHello = useCallback(async (bundle: any, channel: RTCDataChannel) => {
     const self = selfIdentityRef.current;
@@ -437,11 +650,22 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       const api = (window as any).electronAPI;
       // type 3（prekey 消息）会在接收方建立入站会话
       const plain = await api.ratchet.decrypt(peerId, payload.t, payload.b);
-      const obj = JSON.parse(plain) as { c?: string; t?: string };
+      const obj = JSON.parse(plain) as { c?: string; t?: string; f?: FileOfferMeta; id?: string };
       if (obj.c === 'init') {
         // 发起方的会话建立控制消息：入站棘轮已就绪，标记安全并提示接收方核对安全码
         setSecureStatus('secure');
         log(t.chat.p2p.e2eEstablished);
+        return;
+      }
+      if (obj.c === 'file_offer' && obj.f) {
+        void handleFileOffer(obj.f);
+        return;
+      }
+      if (obj.c === 'file_cancel' && typeof obj.id === 'string') {
+        handleFileCancel(obj.id);
+        return;
+      }
+      if (obj.c === 'file_complete') {
         return;
       }
       if (typeof obj.t === 'string') {
@@ -450,12 +674,12 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     } catch {
       dev('收到无法解密的消息（已丢弃）');
     }
-  }, [addMessage, log, dev]);
+  }, [addMessage, handleFileCancel, handleFileOffer, log, dev]);
 
   // 心跳机制
   const startHeartbeat = useCallback(() => {
     if (heartbeatInterval.current) return;
-    
+
     heartbeatInterval.current = window.setInterval(() => {
       if (dc && dc.readyState === 'open') {
         try {
@@ -532,6 +756,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       log(t.chat.p2p.peerDisconnected);
       setConnectionStatus('disconnected');
       resetSecureState();
+      clearFileTransferState();
     };
 
     channel.onmessage = (event) => {
@@ -554,6 +779,9 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         case 'cipher':
           void handleCipher(data.payload);
           break;
+        case 'file_chunk':
+          void handleFileChunk(data);
+          break;
         default:
           // 未知/明文消息一律丢弃，杜绝降级到明文
           dev('收到未知类型的帧，已忽略');
@@ -561,7 +789,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     };
 
     setDc(channel);
-  }, [log, resetSecureState, sendIdentity, handleHello, handleCipher]);
+  }, [log, resetSecureState, clearFileTransferState, sendIdentity, handleHello, handleCipher, handleFileChunk]);
 
   // 早到的 ICE 候选可能先于 remoteDescription 抵达：先缓冲，设好远端描述后再补加。
   const addOrBufferCandidate = useCallback(async (target: RTCPeerConnection, cand: RTCIceCandidateInit) => {
@@ -727,6 +955,93 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     }
   }, [messageInput, dc, secureStatus, sasConfirmed, addMessage, log]);
 
+  const sendFile = useCallback(async (file: File) => {
+    if (!dc || dc.readyState !== 'open' || connectionStatus !== 'connected' || secureStatus !== 'secure' || !sasConfirmed) {
+      log(t.chat.p2p.verifySasFirst, 'WARN');
+      return;
+    }
+    if (hasActiveFileTransfer()) {
+      log(t.chat.p2p.file.busy, 'WARN');
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      log(t.chat.p2p.file.tooLarge, 'WARN');
+      return;
+    }
+
+    const id = randomTransferId();
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const hash = await sha256Hex(bytes);
+      const { key, raw } = await generateFileKey();
+      const totalChunks = chunkCount(bytes.byteLength, DEFAULT_CHUNK_SIZE);
+      const meta: FileOfferMeta = {
+        id,
+        name: file.name || 'file',
+        size: bytes.byteLength,
+        mime: file.type || 'application/octet-stream',
+        chunkSize: DEFAULT_CHUNK_SIZE,
+        totalChunks,
+        hash,
+        key: raw
+      };
+
+      const localUrl = URL.createObjectURL(file);
+      objectUrlsRef.current.add(localUrl);
+      upsertFileTransfer({
+        id,
+        direction: 'sent',
+        name: meta.name,
+        size: meta.size,
+        mime: meta.mime,
+        progress: 0,
+        status: 'sending',
+        url: localUrl
+      });
+
+      await sendEncryptedControl({ c: 'file_offer', f: meta }, dc);
+      for (let seq = 0; seq < totalChunks; seq++) {
+        if (cancelledFilesRef.current.has(id)) {
+          await sendEncryptedControl({ c: 'file_cancel', id }, dc).catch(() => undefined);
+          updateFileTransfer(id, { status: 'cancelled', error: t.chat.p2p.file.cancelled });
+          return;
+        }
+        const { start, end } = chunkRange(seq, DEFAULT_CHUNK_SIZE, bytes.byteLength);
+        const encrypted = await encryptChunk(key, bytes.subarray(start, end));
+        dc.send(JSON.stringify({
+          type: 'file_chunk',
+          id,
+          seq,
+          iv: encrypted.iv,
+          data: encrypted.data
+        }));
+        updateFileTransfer(id, { progress: (seq + 1) / totalChunks });
+        await waitForDataChannelBackpressure(dc);
+      }
+      await sendEncryptedControl({ c: 'file_complete', id }, dc).catch(() => undefined);
+      updateFileTransfer(id, { status: 'completed', progress: 1 });
+    } catch (err) {
+      updateFileTransfer(id, { status: 'failed', error: t.chat.p2p.file.failed });
+      log(t.chat.p2p.file.offerFailed, 'ERROR');
+      dev(`file send failed: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [connectionStatus, dc, dev, hasActiveFileTransfer, log, sasConfirmed, secureStatus, sendEncryptedControl, t.chat.p2p.file.busy, t.chat.p2p.file.cancelled, t.chat.p2p.file.failed, t.chat.p2p.file.offerFailed, t.chat.p2p.file.tooLarge, t.chat.p2p.verifySasFirst, updateFileTransfer, upsertFileTransfer]);
+
+  const handleFileInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    void sendFile(file);
+  }, [sendFile]);
+
+  const cancelFileTransfer = useCallback((id: string) => {
+    cancelledFilesRef.current.add(id);
+    receivingFilesRef.current.delete(id);
+    updateFileTransfer(id, { status: 'cancelled', error: t.chat.p2p.file.cancelled });
+    void sendEncryptedControl({ c: 'file_cancel', id }).catch(() => undefined);
+  }, [sendEncryptedControl, t.chat.p2p.file.cancelled, updateFileTransfer]);
+
   // 断开连接
   const disconnect = useCallback(() => {
     if (signalingRef.current) {
@@ -751,9 +1066,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     setRoomLink('');
     setShowRoomDialog(false);
     resetSecureState();
+    clearFileTransferState();
     stopHeartbeat();
     log(t.chat.p2p.disconnectedManual);
-  }, [pc, dc, stopHeartbeat, resetSecureState, log]);
+  }, [pc, dc, stopHeartbeat, resetSecureState, clearFileTransferState, log]);
 
   // 让握手回调（handleHello）能在验证失败时触发断开，避免 useCallback 定义顺序问题
   useEffect(() => {
@@ -802,6 +1118,19 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       default: return t.chat.notConnected;
     }
   };
+
+  const fileStatusText = (status: FileTransferStatus) => {
+    switch (status) {
+      case 'sending': return t.chat.p2p.file.sending;
+      case 'receiving': return t.chat.p2p.file.receiving;
+      case 'completed': return t.chat.p2p.file.completed;
+      case 'failed': return t.chat.p2p.file.failed;
+      case 'cancelled': return t.chat.p2p.file.cancelled;
+    }
+  };
+
+  const canSendContent = connectionStatus === 'connected' && secureStatus === 'secure' && sasConfirmed;
+  const fileTransferBusy = fileTransfers.some(item => item.status === 'sending' || item.status === 'receiving');
 
   const styles = {
     container: {
@@ -933,6 +1262,18 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       borderTop: '1px solid #e9ecef',
       background: 'white'
     },
+    iconBtn: {
+      width: '42px',
+      minWidth: '42px',
+      height: '42px',
+      border: '2px solid #667eea',
+      borderRadius: '8px',
+      background: 'white',
+      color: '#667eea',
+      cursor: 'pointer',
+      fontSize: '18px',
+      fontWeight: '600'
+    },
     input: {
       flex: 1,
       padding: '10px 15px',
@@ -940,6 +1281,48 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       borderRadius: '8px',
       fontSize: '14px',
       outline: 'none'
+    },
+    fileCard: {
+      marginBottom: '12px',
+      padding: '10px 12px',
+      borderRadius: '8px',
+      maxWidth: '70%',
+      border: '1px solid #dbe2ea',
+      background: '#f8fbff',
+      color: '#2d3748'
+    },
+    fileCardSent: {
+      marginLeft: 'auto',
+      background: '#eef0ff',
+      borderColor: '#c8cef7'
+    },
+    fileName: {
+      fontWeight: 700,
+      fontSize: '13px',
+      marginBottom: '4px',
+      wordBreak: 'break-word' as const
+    },
+    progressOuter: {
+      width: '100%',
+      height: '6px',
+      background: '#e9ecef',
+      borderRadius: '999px',
+      overflow: 'hidden',
+      marginTop: '8px'
+    },
+    progressInner: {
+      height: '100%',
+      background: '#667eea',
+      borderRadius: '999px'
+    },
+    imagePreview: {
+      display: 'block',
+      maxWidth: '260px',
+      maxHeight: '180px',
+      borderRadius: '6px',
+      marginTop: '8px',
+      objectFit: 'contain' as const,
+      background: '#fff'
     },
     modal: {
       position: 'fixed' as const,
@@ -1158,8 +1541,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
             key={message.id}
             style={{
               ...styles.message,
-              ...(message.type === 'sent' ? styles.sentMessage : 
-                  message.type === 'received' ? styles.receivedMessage : 
+              ...(message.type === 'sent' ? styles.sentMessage :
+                  message.type === 'received' ? styles.receivedMessage :
                   styles.systemMessage)
             }}
           >
@@ -1169,11 +1552,69 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
             </div>
           </div>
         ))}
+        {fileTransfers.map((file) => (
+          <div
+            key={file.id}
+            style={{
+              ...styles.fileCard,
+              ...(file.direction === 'sent' ? styles.fileCardSent : {})
+            }}
+          >
+            <div style={styles.fileName}>{file.name}</div>
+            <div style={{ fontSize: 12, opacity: 0.78 }}>
+              {file.direction === 'sent' ? t.chat.p2p.file.sent : t.chat.p2p.file.received} · {formatBytes(file.size)} · {fileStatusText(file.status)}
+              {file.status !== 'completed' && ` · ${Math.round(file.progress * 100)}%`}
+            </div>
+            {file.status !== 'completed' && file.status !== 'failed' && file.status !== 'cancelled' && (
+              <div style={styles.progressOuter}>
+                <div style={{ ...styles.progressInner, width: `${Math.max(2, Math.round(file.progress * 100))}%` }} />
+              </div>
+            )}
+            {file.error && (
+              <div style={{ fontSize: 12, color: '#c0392b', marginTop: 6 }}>{file.error}</div>
+            )}
+            {file.status === 'completed' && file.url && isImageMime(file.mime) && (
+              <img src={file.url} alt={t.chat.p2p.file.imageAlt} style={styles.imagePreview} />
+            )}
+            {file.status === 'completed' && file.url && (
+              <a
+                href={file.url}
+                download={file.name}
+                style={{ display: 'inline-block', marginTop: 8, fontSize: 12, color: '#4b5bdc', fontWeight: 700 }}
+              >
+                {t.chat.p2p.file.download}
+              </a>
+            )}
+            {(file.status === 'sending' || file.status === 'receiving') && (
+              <button
+                style={{ ...styles.btnSecondary, padding: '4px 10px', fontSize: 12, marginTop: 8 }}
+                onClick={() => cancelFileTransfer(file.id)}
+              >
+                {t.chat.p2p.file.cancel}
+              </button>
+            )}
+          </div>
+        ))}
         <div ref={messagesEndRef} />
       </div>
 
       {/* 输入区域 */}
       <div style={styles.inputArea}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          style={{ display: 'none' }}
+          onChange={handleFileInputChange}
+        />
+        <button
+          style={{ ...styles.iconBtn, opacity: canSendContent && !fileTransferBusy ? 1 : 0.45, cursor: canSendContent && !fileTransferBusy ? 'pointer' : 'not-allowed' }}
+          title={t.chat.p2p.file.attachTitle}
+          aria-label={t.chat.p2p.file.attachTitle}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={!canSendContent || fileTransferBusy}
+        >
+          📎
+        </button>
         <input
           style={styles.input}
           type="text"
@@ -1187,12 +1628,12 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
                 ? t.chat.p2p.placeholderConfirmSas
                 : t.chat.typePlaceholder
           }
-          disabled={connectionStatus !== 'connected' || secureStatus !== 'secure' || !sasConfirmed}
+          disabled={!canSendContent}
         />
         <button
           style={styles.btn}
           onClick={() => void sendMessage()}
-          disabled={connectionStatus !== 'connected' || secureStatus !== 'secure' || !sasConfirmed}
+          disabled={!canSendContent}
         >
           {t.chat.send}
         </button>
@@ -1223,4 +1664,4 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       )}
     </div>
   );
-}; 
+};
