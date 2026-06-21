@@ -63,9 +63,12 @@ async function openRoomCodeDialog(page) {
 
 (async () => {
   const logs = [];
-  const browser = await chromium.launch({ headless: true, args: launchArgs });
-  const ctxA = await browser.newContext({ ignoreHTTPSErrors: true });
-  const ctxB = await browser.newContext({ ignoreHTTPSErrors: true });
+  // PROXY 环境变量 → 让浏览器经代理访问外网（测线上 veilconnect.org 用）。
+  const proxy = process.env.PROXY ? { server: process.env.PROXY } : undefined;
+  const browser = await chromium.launch({ headless: true, args: launchArgs, proxy });
+  const ctxOpts = { ignoreHTTPSErrors: true, ...(proxy ? { proxy } : {}) };
+  const ctxA = await browser.newContext(ctxOpts);
+  const ctxB = await browser.newContext(ctxOpts);
   // 第4个参数 relayMode: 'off' → 设 vc.relayOnly=0 直连; 其它/缺省 → 保持默认(relayOnly ON, 走 TURN)
   const relayMode = process.argv[4] || 'off';
   if (relayMode === 'off') {
@@ -99,16 +102,15 @@ async function openRoomCodeDialog(page) {
     await B.getByRole('button', { name: '加入房间', exact: true }).click();
     logs.push('--- B joined room by code ---');
 
-    // 等待连接 / 安全状态
+    // 等待真正进入加密阶段（状态栏出现「已加密」；不要匹配静态的「安全码」标签）
     let connected = false;
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 30; i++) {
       await A.waitForTimeout(1000);
       const aTxt = await A.locator('body').innerText().catch(()=>'');
       const bTxt = await B.locator('body').innerText().catch(()=>'');
-      if (/已加密|已验证|安全码|待核对/.test(aTxt) || /已加密|已验证|安全码|待核对/.test(bTxt)) { connected = true; logs.push(`--- secure UI appeared at ${i+1}s ---`); break; }
-      if (/已连接|connected/i.test(aTxt) && /已连接|connected/i.test(bTxt)) { connected = true; logs.push(`--- both connected at ${i+1}s ---`); break; }
+      if (/已加密/.test(aTxt) && /已加密/.test(bTxt)) { connected = true; logs.push(`--- both reached 已加密 at ${i+1}s ---`); break; }
     }
-    logs.push(`\n=== RESULT: ${connected ? 'CONNECTED/secure-stage reached' : 'NOT CONNECTED (timeout)'} ===`);
+    logs.push(`\n=== RESULT: ${connected ? 'CONNECTED (both 已加密)' : 'NOT CONNECTED (timeout)'} ===`);
 
     // dump final status text
     const statusA = await A.locator('body').innerText().catch(()=>'').then(t => (t.match(/(未连接|连接中|已连接|已加密[^\n]*|待核对[^\n]*|已验证[^\n]*)/g)||[]).join(' | '));
