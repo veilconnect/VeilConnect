@@ -16,6 +16,33 @@ import {
   isImageMime,
   sha256Hex
 } from '../../web/fileTransfer/fileTransfer';
+import { deriveSafetyCode } from '../../web/security/safetyCode';
+import {
+  generatePairingCode,
+  generateNonce,
+  groupPairingCode,
+  normalizePairingCode,
+  isValidPairingCode,
+  preparePairing,
+  verifyPeerReveal,
+  contentGateOpen,
+  PairingMaterials,
+  PartyKeys
+} from '../../web/security/pairing';
+
+/** 配对码握手超时：pairRequired 后这段时间内未完成校验即断开，避免永久“验证中”。 */
+const PAIR_HANDSHAKE_TIMEOUT_MS = 45_000;
+import {
+  DEFAULT_ICE_SERVERS,
+  DEFAULT_TURN_ENDPOINT,
+  FALLBACK_STUN,
+  PRIMARY_STUN,
+  hasTurnServer,
+  probeStun,
+  readRelayOnly,
+  readStaticTurn
+} from '../../web/webrtc/iceConfig';
+import { waitForDataChannelBackpressure } from '../../web/webrtc/backpressure';
 
 /** 从链接或裸 hash 解析房间参数：支持完整 URL（含 #room=..&t=..）或纯 'room=..&t=..'。 */
 function parseRoomLink(input: string): { roomId: string; token: string } | null {
@@ -67,11 +94,6 @@ interface ReceivingFile {
   assembler: ChunkAssembler;
 }
 
-const FILE_BACKPRESSURE_HIGH = 1024 * 1024;
-const FILE_BACKPRESSURE_LOW = 256 * 1024;
-const FILE_BACKPRESSURE_TIMEOUT_MS = 120_000;
-const FILE_BACKPRESSURE_POLL_MS = 100;
-
 function displayNickname(nickname: string | undefined | null): string {
   const name = (nickname || '').trim();
   if (!name) return '';
@@ -92,118 +114,6 @@ function randomTransferId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
-
-function waitForDataChannelBackpressure(channel: RTCDataChannel): Promise<void> {
-  if (channel.bufferedAmount <= FILE_BACKPRESSURE_HIGH) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const previous = channel.onbufferedamountlow;
-    let done = false;
-    let poll: number | null = null;
-    let timer: number | null = null;
-
-    const cleanup = () => {
-      if (timer !== null) window.clearTimeout(timer);
-      if (poll !== null) window.clearInterval(poll);
-      channel.onbufferedamountlow = previous;
-    };
-    const finish = () => {
-      if (done) return;
-      done = true;
-      cleanup();
-      resolve();
-    };
-    const fail = (message: string) => {
-      if (done) return;
-      done = true;
-      cleanup();
-      reject(new Error(message));
-    };
-    const check = () => {
-      if (channel.readyState !== 'open') {
-        fail('file transfer channel closed');
-        return;
-      }
-      if (channel.bufferedAmount <= FILE_BACKPRESSURE_LOW) finish();
-    };
-
-    channel.bufferedAmountLowThreshold = FILE_BACKPRESSURE_LOW;
-    channel.onbufferedamountlow = (event) => {
-      if (typeof previous === 'function') previous.call(channel, event);
-      finish();
-    };
-    poll = window.setInterval(check, FILE_BACKPRESSURE_POLL_MS);
-    timer = window.setTimeout(() => fail('file transfer backpressure timeout'), FILE_BACKPRESSURE_TIMEOUT_MS);
-    check();
-  });
-}
-
-/**
- * 安全码（safety number / SAS）：基于双方「长期 Ed25519 身份公钥」派生，
- * 因此跨会话稳定、可带外（电话/当面）核对；对密钥排序后再哈希，保证双方算出同一个值。
- * 两端比对一致即可排除「粘贴邀请码的渠道被中间人中继并替换密钥」的全程 MITM。
- *
- * 取 SHA-256 前 10 字节并对 10^20 取模 → 20 位十进制。10^20 ≈ 2^66.4，是此处瓶颈，
- * 故有效熵约 66 bit（而非旧版 16 位 / 实际 ~53 bit）：主动攻击者要伪造同码，需研磨出
- * 一对身份公钥使其组合哈希落在同一 20 位值上，约 2^66 量级。
- */
-async function deriveSafetyCode(aIdentityKey: string, bIdentityKey: string): Promise<string> {
-  const [x, y] = [aIdentityKey, bIdentityKey].sort();
-  const data = new TextEncoder().encode(`veilconnect-safety|${x}|${y}`);
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
-  let num = 0n;
-  for (let i = 0; i < 10; i++) num = (num << 8n) | BigInt(digest[i]);
-  const code = (num % 100_000_000_000_000_000_000n).toString().padStart(20, '0'); // 10^20 ≈ 2^66
-  return code.replace(/(\d{4})(?=\d)/g, '$1 '); // 20 位分 5 组显示
-}
-
-// STUN 选择策略：默认只用 Cloudflare；仅当探测到 Cloudflare 不可达时，才回退到小米 + B站。
-// （三者都替换了在中国被墙的 Google STUN。）注意：RTCPeerConnection 的 iceServers 数组是
-// 并行查询、没有原生「失败才用下一个」的串行回退；要实现「不可用才回退」必须先主动探测可达性。
-// IPv6 候选由浏览器在有 IPv6 时自动收集，无需额外配置。
-const PRIMARY_STUN: RTCIceServer = { urls: 'stun:stun.cloudflare.com:3478' };
-const FALLBACK_STUN: RTCIceServer[] = [
-  { urls: 'stun:stun.miwifi.com:3478' },
-  { urls: 'stun:stun.chat.bilibili.com:3478' }
-];
-// 探测前的安全默认：先把全部列上（保证即使用户在探测完成前就建连也有可用 STUN），
-// 探测完成后再按结果收敛为「仅 Cloudflare」或「仅小米+B站」。
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [PRIMARY_STUN, ...FALLBACK_STUN];
-
-/**
- * 探测某个 STUN 是否可达：用仅含该 STUN 的临时 PeerConnection 收集候选，
- * 在超时内拿到 server-reflexive(srflx) 候选即视为可达（说明 STUN 成功返回了公网映射）。
- * 探测用的 PC 立即关闭，不参与真正的会话。
- */
-async function probeStun(server: RTCIceServer, timeoutMs = 1500): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    let pc: RTCPeerConnection | null = null;
-    let done = false;
-    const finish = (ok: boolean) => {
-      if (done) return;
-      done = true;
-      try { pc?.close(); } catch { /* ignore */ }
-      resolve(ok);
-    };
-    try {
-      pc = new RTCPeerConnection({ iceServers: [server] });
-      pc.createDataChannel('probe');
-      pc.onicecandidate = (e) => {
-        if (e.candidate && e.candidate.type === 'srflx') finish(true);
-      };
-      pc.createOffer().then((o) => pc!.setLocalDescription(o)).catch(() => finish(false));
-      setTimeout(() => finish(false), timeoutMs);
-    } catch {
-      finish(false);
-    }
-  });
-}
-// TURN 临时凭据签发端点（推荐 Cloudflare Worker，见 infra/cloudflare-turn-worker.js；或自建后端）。
-// 自部署：信令服务器内置 GET /turn-credentials（基于 coturn use-auth-secret 签发时限凭据），
-// 故默认端点即同源的 '/turn-credentials'，开箱即用；可用 localStorage 'vc.turnEndpoint' 覆盖，
-// 'vc.turn' 可直接配静态 TURN。
-// 注意：relayOnly 现在【默认开启】（隐藏双方真实 IP）——因此必须有可用 TURN 连接才能建立。
-//      若要放弃此保护以换连通性（如本地双标签页联调），显式设 localStorage 'vc.relayOnly' = '0'。
-const DEFAULT_TURN_ENDPOINT = '/turn-credentials';
 
 interface SimpleP2PChatProps {
   userIdentity?: {
@@ -240,6 +150,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   // 用户是否已带外核对安全码（SAS）。在确认前只能声称「已加密」，不能声称「已验证/抗 MITM」。
   const [sasConfirmed, setSasConfirmed] = useState(false);
 
+  // 配对码（自动抗 MITM）：双方带外共享一个高熵配对码，握手时密码学自动核对，无需肉眼比对 SAS。
+  // pairRequired：本会话是否启用配对码（任一端启用即双方都走，fail-closed 不降级）。
+  const [pairRequired, setPairRequired] = useState(false);
+  const [pairVerified, setPairVerified] = useState(false);
+  const [usePairing, setUsePairing] = useState(false); // host 建房时是否启用
+  const [pairingCode, setPairingCode] = useState('');   // host 生成的配对码（供展示/带外分享）
+  const [showPairEnter, setShowPairEnter] = useState(false); // guest 输入配对码弹窗
+  const [pairEnterInput, setPairEnterInput] = useState('');
+  const [joinPairInput, setJoinPairInput] = useState('');     // guest 加入弹窗里可选预填配对码
+
   // UI：瞬时提示（toast）、关于面板展开、本机昵称（可改）
   const [toasts, setToasts] = useState<{ id: number; text: string; kind: 'info' | 'warn' | 'error' }[]>([]);
   const [showAbout, setShowAbout] = useState(false);
@@ -272,6 +192,23 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   // 避免 sendIdentity 与对端 hello 到达之间的竞态。
   const bundleInitRef = useRef<Promise<{ bundle: any; signature: string }> | null>(null);
 
+  // 配对码握手状态（用 ref 以便在 DataChannel 回调里同步读写，避免 setState 异步竞态）。
+  const pairRequiredRef = useRef<boolean>(false);     // 本会话是否启用配对码
+  const pairCodeRef = useRef<string | null>(null);    // 归一化后的配对码（host 生成 / guest 输入）
+  const pairVerifiedRef = useRef<boolean>(false);
+  const pairSelfKeysRef = useRef<PartyKeys | null>(null);   // 本端身份/box/棘轮三元组
+  const pairPeerKeysRef = useRef<PartyKeys | null>(null);   // 对端三元组（来自 hello）
+  const pairMaterialsRef = useRef<PairingMaterials | null>(null);
+  const peerPairCommitRef = useRef<string | null>(null);
+  const peerPairRevealRef = useRef<string | null>(null);
+  const myCommitSentRef = useRef<boolean>(false);
+  const myRevealSentRef = useRef<boolean>(false);
+  const pairSelfNonceRef = useRef<string | null>(null); // 本端本会话一次性 nonce（防重放）
+  const pairTimeoutRef = useRef<number | null>(null);    // 配对握手超时计时器
+  // startPairing / enterPairingMode 在文件后段定义，handleHello 在前段，用 ref 指针打破顺序依赖。
+  const startPairingRef = useRef<((channel: RTCDataChannel) => Promise<void>) | null>(null);
+  const enterPairingModeRef = useRef<(() => void) | null>(null);
+
   // WebRTC ICE 服务器与中继策略。为「尽量安全、不被中国相关方截获元数据」：
   // - relayOnly 默认开启：只用 TURN 的 relay 候选，隐藏双方真实 IP，邀请码(SDP)里也不出现真实 IP；
   // - STUN 仅在关闭 relayOnly 时才用，优先 Cloudflare（境外），探测不可达才回退小米/B站（中国节点，仅最后兜底）。
@@ -286,12 +223,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     let cancelled = false;
     (async () => {
       // relayOnly 默认开启（尽量安全）；显式设 vc.relayOnly='0' 才关闭（以暴露真实 IP 换连通性）
-      let relayOnly = true;
-      try {
-        if (typeof localStorage !== 'undefined') {
-          relayOnly = localStorage.getItem('vc.relayOnly') !== '0';
-        }
-      } catch { /* 忽略 */ }
+      const relayOnly = readRelayOnly();
       relayOnlyRef.current = relayOnly;
 
       // STUN 仅在非 relay 模式下需要（relay 模式只收集 TURN 的 relay 候选，根本不接触 STUN）。
@@ -304,17 +236,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       }
 
       // 静态 TURN（自建 coturn）：vc.turn = {"urls":"turn:host:3478","username":"u","credential":"p"}
-      try {
-        if (typeof localStorage !== 'undefined') {
-          const raw = localStorage.getItem('vc.turn');
-          if (raw) {
-            const turn = JSON.parse(raw) as RTCIceServer;
-            if (turn && turn.urls) servers.push(turn);
-          }
-        }
-      } catch {
-        // 忽略坏配置
-      }
+      const staticTurn = readStaticTurn();
+      if (staticTurn) servers.push(staticTurn);
 
       // 动态 TURN：从签发端点（推荐 Cloudflare Worker，见 infra/cloudflare-turn-worker.js）现签临时凭据
       const endpoint = (typeof localStorage !== 'undefined' && localStorage.getItem('vc.turnEndpoint')) || DEFAULT_TURN_ENDPOINT;
@@ -336,10 +259,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
 
       // 安全守卫：relayOnly 开启却没有任何 TURN → 无法建连。为「尽量安全」不自动降级，
       // 仅记录告警，建连时再 surface 给用户（提示部署 Cloudflare TURN 或临时关 relayOnly）。
-      const hasTurn = servers.some(s => {
-        const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
-        return urls.some(u => typeof u === 'string' && u.startsWith('turn'));
-      });
+      const hasTurn = hasTurnServer(servers);
       iceWarningRef.current = (relayOnly && !hasTurn)
         ? t.chat.p2p.relayNotReady
         : null;
@@ -380,12 +300,63 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       peerIdRef.current = null;
     }
     bundleInitRef.current = null;
+    historyLoadedRef.current = null;
+    sasConfirmedRef.current = false;
+    queuedRxRef.current = [];
     peerBoxKeyRef.current = null;
+    // 配对码会话状态（保留 host 已生成的 pairCode/pairRequired 设置直到真正断开，避免重连丢失）
+    pairVerifiedRef.current = false;
+    pairSelfKeysRef.current = null;
+    pairPeerKeysRef.current = null;
+    pairMaterialsRef.current = null;
+    peerPairCommitRef.current = null;
+    peerPairRevealRef.current = null;
+    myCommitSentRef.current = false;
+    myRevealSentRef.current = false;
+    pairSelfNonceRef.current = null;
+    if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
     setSecureStatus('idle');
     setPeerInfo(null);
     setSafetyCode('');
     setSasConfirmed(false);
+    setPairVerified(false);
   }, []);
+
+  // 启动配对握手超时：到时仍未验证则断开（避免永久“验证中”卡死）。
+  const armPairingTimeout = useCallback(() => {
+    if (pairTimeoutRef.current) return;
+    pairTimeoutRef.current = window.setTimeout(() => {
+      pairTimeoutRef.current = null;
+      if (pairRequiredRef.current && !pairVerifiedRef.current) {
+        log(t.chat.p2p.pairTimedOut, 'ERROR');
+        disconnectRef.current?.();
+      }
+    }, PAIR_HANDSHAKE_TIMEOUT_MS);
+  }, [log]);
+
+  // 进入配对模式（fail-closed 总开关）：任何一端要求、或收到任何 pair-* 帧都会调用。
+  // 一旦进入：① 启动超时；② 若此前已走手动 SAS 放行（疑似 late 配对帧/降级注入），立即断开。
+  const enterPairingMode = useCallback(() => {
+    const firstTime = !pairRequiredRef.current;
+    if (firstTime) {
+      pairRequiredRef.current = true;
+      setPairRequired(true);
+    }
+    // 幂等地启动超时（host/预填码 guest 已提前置 pairRequired=true，仍需在连接活跃后开始计时）。
+    armPairingTimeout();
+    // 首次进入配对模式时若此前已走手动 SAS 放行（疑似 late 配对帧/降级注入），立即断开。
+    if (firstTime && sasConfirmedRef.current && !pairVerifiedRef.current) {
+      log(t.chat.p2p.pairFailed, 'ERROR');
+      disconnectRef.current?.();
+    }
+  }, [armPairingTimeout, log]);
+
+  useEffect(() => { enterPairingModeRef.current = enterPairingMode; }, [enterPairingMode]);
+
+  // 内容门禁统一判定：配对模式只认 pairVerified；否则认手动 SAS（向后兼容）。
+  const isContentUnlocked = useCallback(() => (
+    contentGateOpen(pairRequiredRef.current, pairVerifiedRef.current, sasConfirmedRef.current)
+  ), []);
 
   // 修改本机昵称（对端在握手后会看到它）
   const renameSelf = useCallback(async () => {
@@ -409,6 +380,58 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       timestamp: Date.now()
     };
     setMessages(prev => [...prev, newMessage]);
+  }, []);
+
+  // 可选的消息持久化（默认关，保持「关页即焚」的隐私默认）。
+  // 设 localStorage 'vc.persist' = '1' 开启：文本消息按对端 userId 分会话，经加密 Web Worker
+  // 内的 MessageHistoryManager（per-store 密钥 AES 加密落 IndexedDB）保存，重连后自动载入。
+  const persistRef = useRef<boolean>(false);
+  const historyLoadedRef = useRef<string | null>(null);
+  useEffect(() => {
+    try {
+      persistRef.current = typeof localStorage !== 'undefined' && localStorage.getItem('vc.persist') === '1';
+    } catch { /* ignore */ }
+  }, []);
+
+  // SAS 待核对期间：解密照常（证明安全信道），但对端的【可见内容】（文本/文件 offer）先入队、
+  // 不进入 UI，直到用户带外核对安全码并确认一致后才统一放行。
+  // 这样可避免「未排除中间人时，对端注入的内容已先展示」的钓鱼/混淆面（codex 评审指出的接收侧缺口）。
+  const sasConfirmedRef = useRef<boolean>(false);
+  const queuedRxRef = useRef<Array<{ kind: 'text'; peerId: string; text: string } | { kind: 'file'; meta: FileOfferMeta }>>([]);
+  useEffect(() => { sasConfirmedRef.current = sasConfirmed; }, [sasConfirmed]);
+
+  const persistMessage = useCallback(async (peerId: string, text: string, direction: 'incoming' | 'outgoing') => {
+    if (!persistRef.current || !peerId) return;
+    try {
+      await (window as any).electronAPI?.messageHistory?.save?.({
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        sessionId: peerId,
+        peerId,
+        direction,
+        content: text,
+        contentType: 'text',
+        timestamp: Date.now(),
+        status: 'delivered'
+      });
+    } catch { /* 持久化失败不影响收发 */ }
+  }, []);
+
+  const loadHistory = useCallback(async (peerId: string) => {
+    if (!persistRef.current || !peerId || historyLoadedRef.current === peerId) return;
+    historyLoadedRef.current = peerId;
+    try {
+      const rows = await (window as any).electronAPI?.messageHistory?.get?.({ sessionId: peerId });
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      const restored: Message[] = rows
+        .filter((m: any) => m && m.contentType === 'text' && typeof m.content === 'string')
+        .map((m: any) => ({
+          id: String(m.id),
+          text: m.content,
+          type: m.direction === 'outgoing' ? 'sent' : 'received',
+          timestamp: Number(m.timestamp) || Date.now()
+        }));
+      if (restored.length) setMessages(prev => [...restored, ...prev]);
+    } catch { /* 历史载入失败静默忽略 */ }
   }, []);
 
   const updateFileTransfer = useCallback((id: string, patch: Partial<FileTransferView>) => {
@@ -505,6 +528,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     }
     try {
       const { bundle, signature } = await ensureBundle();
+      // 本会话一次性 nonce（防旧 proof 重放），随 hello 交换并纳入配对 transcript。
+      if (!pairSelfNonceRef.current) pairSelfNonceRef.current = generateNonce();
       channel.send(JSON.stringify({
         type: 'hello',
         userId: id.userId,
@@ -513,7 +538,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         keyBindingSignature: id.keyBindingSignature,
         ratchetBundle: bundle,
         ratchetSignature: signature,
-        nickname: id.nickname
+        nickname: id.nickname,
+        // 是否要求用配对码验证（对端据此提示输入；任一端要求即双方都走，fail-closed）
+        pairing: pairRequiredRef.current,
+        pairNonce: pairSelfNonceRef.current
       }));
     } catch (err) {
       log(t.chat.p2p.secureChannelFailed, 'ERROR');
@@ -620,6 +648,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     if (typeof id !== 'string' || cancelledFilesRef.current.has(id)) return;
     const rx = receivingFilesRef.current.get(id);
     if (!rx) {
+      // 全局上限：防攻击者用大量不同 id 的「孤儿 chunk」在 offer/验证放行前耗尽内存。
+      let total = 0;
+      for (const arr of pendingFileChunksRef.current.values()) total += arr.length;
+      if (total >= 8192) return;
       const queued = pendingFileChunksRef.current.get(id) || [];
       if (queued.length < 2048) {
         queued.push(chunk);
@@ -653,6 +685,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       peerIdRef.current = peer.userId;
       peerBoxKeyRef.current = bundle.boxPublicKey;
       setPeerInfo({ userId: peer.userId, nickname: peer.nickname });
+      void loadHistory(peer.userId);
       // 安全码基于稳定的长期身份公钥派生，便于带外核对
       if (self?.publicKey) {
         setSafetyCode(await deriveSafetyCode(self.publicKey, bundle.publicKey));
@@ -673,6 +706,33 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         log(t.chat.p2p.e2eEstablishing);
         dev(`ratchet pending as responder, peer=${String(peer.userId).slice(0, 12)}…`);
       }
+
+      // —— 配对码（自动抗 MITM）——
+      // 始终记录双方「身份 + box + 棘轮 + nonce」：transcript 绑定它们，中间人必须冒充→两端观测不同→证明不匹配。
+      // 即便对端 hello 的 pairing 标志被中间人剥离，后续收到 pair-commit/reveal 也能据此启动（降级防御）。
+      if (self?.publicKey && self.boxPublicKey) {
+        const myBundle = await ensureBundle();
+        if (!pairSelfNonceRef.current) pairSelfNonceRef.current = generateNonce();
+        pairSelfKeysRef.current = {
+          identityKey: self.publicKey,
+          boxKey: self.boxPublicKey,
+          ratchetKey: myBundle.bundle.identityKey,
+          nonce: pairSelfNonceRef.current
+        };
+        pairPeerKeysRef.current = {
+          identityKey: bundle.publicKey,
+          boxKey: bundle.boxPublicKey,
+          ratchetKey: bundle.ratchetBundle.identityKey,
+          nonce: typeof bundle.pairNonce === 'string' ? bundle.pairNonce : ''
+        };
+      }
+      // 任一端要求即双方都走（fail-closed，不降级到仅手动 SAS）。
+      const usePair = !!bundle.pairing || pairRequiredRef.current;
+      if (usePair) {
+        enterPairingModeRef.current?.();
+        if (pairCodeRef.current) await startPairingRef.current?.(channel);
+        else setShowPairEnter(true); // 本端尚无配对码（guest）→ 提示输入
+      }
     } catch (err) {
       setSecureStatus('failed');
       peerBoxKeyRef.current = null;
@@ -681,9 +741,23 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       dev(`identity verification failed: ${err instanceof Error ? err.message : err}`);
       disconnectRef.current?.();
     }
-  }, [log, dev]);
+  }, [log, dev, loadHistory, ensureBundle]);
 
   // 收到密文：经 Double Ratchet 解密（棘轮天然抗重放：每条消息密钥用后即删）
+  // SAS 确认后放行此前入队的对端可见内容（文本进聊天记录、文件 offer 进入接收流程）。
+  const flushQueuedRx = useCallback(() => {
+    const queued = queuedRxRef.current;
+    queuedRxRef.current = [];
+    for (const item of queued) {
+      if (item.kind === 'text') {
+        addMessage(item.text, 'received');
+        void persistMessage(item.peerId, item.text, 'incoming');
+      } else {
+        void handleFileOffer(item.meta);
+      }
+    }
+  }, [addMessage, persistMessage, handleFileOffer]);
+
   const handleCipher = useCallback(async (payload: any) => {
     const peerId = peerIdRef.current;
     if (!peerId || !payload || typeof payload.t !== 'number') {
@@ -701,10 +775,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         log(t.chat.p2p.e2eEstablished);
         return;
       }
-      if (obj.c === 'file_offer' && obj.f) {
-        void handleFileOffer(obj.f);
-        return;
-      }
+      // 控制类消息（取消/完成）始终处理；但「新文件 offer」与「文本」在 SAS 确认前先入队。
       if (obj.c === 'file_cancel' && typeof obj.id === 'string') {
         handleFileCancel(obj.id);
         return;
@@ -712,13 +783,112 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       if (obj.c === 'file_complete') {
         return;
       }
+      if (obj.c === 'file_offer' && obj.f) {
+        if (isContentUnlocked()) void handleFileOffer(obj.f);
+        else queuedRxRef.current.push({ kind: 'file', meta: obj.f });
+        return;
+      }
       if (typeof obj.t === 'string') {
-        addMessage(obj.t, 'received');
+        if (isContentUnlocked()) {
+          addMessage(obj.t, 'received');
+          void persistMessage(peerId, obj.t, 'incoming');
+        } else {
+          // 未核对安全码/未通过配对码前不展示对端内容，仅入队，待放行
+          queuedRxRef.current.push({ kind: 'text', peerId, text: obj.t });
+          dev('内容门禁未放行，已缓存对端消息，待 SAS/配对码确认后放行');
+        }
       }
     } catch {
       dev('收到无法解密的消息（已丢弃）');
     }
-  }, [addMessage, handleFileCancel, handleFileOffer, log, dev]);
+  }, [addMessage, handleFileCancel, handleFileOffer, persistMessage, log, dev, isContentUnlocked]);
+
+  // ——————————————————— 配对码（自动抗 MITM）握手 ———————————————————
+  // 校验对端 reveal：commit 绑定 + 常量时间比对。一致=已密码学确认无中间人→放行内容；
+  // 不一致=配对码错误或存在中间人→立即断开、不展示任何内容。
+  const tryVerifyPairing = useCallback(async () => {
+    const m = pairMaterialsRef.current;
+    const commit = peerPairCommitRef.current;
+    const reveal = peerPairRevealRef.current;
+    if (!m || !commit || !reveal || pairVerifiedRef.current) return; // 材料未齐或已完成
+    let ok = false;
+    try { ok = await verifyPeerReveal(m, commit, reveal); } catch { ok = false; }
+    if (ok) {
+      pairVerifiedRef.current = true;
+      setPairVerified(true);
+      if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
+      // 配对成功 = 已密码学确认无中间人。门禁走 isContentUnlocked()（配对模式认 pairVerified），
+      // 不再借道 sasConfirmed，避免两条路径互相绕过；放行此前入队的对端内容。
+      flushQueuedRx();
+      pushToast(t.chat.p2p.pairVerifiedBadge);
+    } else {
+      log(t.chat.p2p.pairFailed, 'ERROR');
+      disconnectRef.current?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flushQueuedRx, pushToast, log]);
+
+  // 已发 commit 且收到对端 commit 后，再 reveal 自己的 proof（commit-then-reveal）。
+  const maybeSendReveal = useCallback((channel: RTCDataChannel) => {
+    if (myCommitSentRef.current && peerPairCommitRef.current && !myRevealSentRef.current &&
+        pairMaterialsRef.current && channel.readyState === 'open') {
+      channel.send(JSON.stringify({ type: 'pair-reveal', proof: pairMaterialsRef.current.myProof }));
+      myRevealSentRef.current = true;
+    }
+  }, []);
+
+  // 备好本端配对材料并发出 commit；若对端 commit/reveal 已到则顺势 reveal/校验。
+  const startPairing = useCallback(async (channel: RTCDataChannel) => {
+    const code = pairCodeRef.current;
+    const self = pairSelfKeysRef.current;
+    const peer = pairPeerKeysRef.current;
+    if (!code || !self || !peer || pairMaterialsRef.current) return; // 缺料或已开始
+    let materials: PairingMaterials;
+    try { materials = await preparePairing(code, self, peer); }
+    catch (err) { dev(`pairing prepare failed: ${err instanceof Error ? err.message : err}`); return; }
+    pairMaterialsRef.current = materials;
+    if (channel.readyState === 'open' && !myCommitSentRef.current) {
+      channel.send(JSON.stringify({ type: 'pair-commit', commit: materials.myCommit }));
+      myCommitSentRef.current = true;
+    }
+    maybeSendReveal(channel);
+    if (peerPairRevealRef.current) void tryVerifyPairing();
+  }, [dev, maybeSendReveal, tryVerifyPairing]);
+
+  // 让 handleHello（前段定义）能调用 startPairing。
+  useEffect(() => { startPairingRef.current = startPairing; }, [startPairing]);
+
+  const handlePairCommit = useCallback(async (data: any, channel: RTCDataChannel) => {
+    if (typeof data?.commit !== 'string') return;
+    peerPairCommitRef.current = data.commit;
+    // 降级防御：收到任何 pair-* 帧即进入配对模式（即便 hello 的 pairing 标志被中间人剥离）。
+    enterPairingModeRef.current?.();
+    if (!pairCodeRef.current) { setShowPairEnter(true); return; } // 等用户输入码
+    if (!pairMaterialsRef.current) await startPairing(channel);
+    else { maybeSendReveal(channel); void tryVerifyPairing(); } // reveal 可能已缓冲，补一次校验
+  }, [startPairing, maybeSendReveal, tryVerifyPairing]);
+
+  const handlePairReveal = useCallback(async (data: any, channel: RTCDataChannel) => {
+    if (typeof data?.proof !== 'string') return;
+    peerPairRevealRef.current = data.proof;
+    enterPairingModeRef.current?.();
+    // reveal 可能早于本端备料：若有码则确保已启动握手（startPairing 内会顺势校验缓冲的 reveal）。
+    if (pairCodeRef.current && !pairMaterialsRef.current) await startPairing(channel);
+    else if (!pairCodeRef.current) setShowPairEnter(true);
+    await tryVerifyPairing();
+  }, [startPairing, tryVerifyPairing]);
+
+  // guest 输入配对码后：归一化 + 长度校验（拒弱码）→ 进入配对模式 → 启动握手。
+  const confirmPairCode = useCallback(async () => {
+    const norm = normalizePairingCode(pairEnterInput);
+    if (!isValidPairingCode(norm)) { log(t.chat.p2p.pairMissingCode, 'WARN'); return; }
+    pairCodeRef.current = norm;
+    enterPairingModeRef.current?.();
+    setShowPairEnter(false);
+    setPairEnterInput('');
+    if (dc && dc.readyState === 'open') await startPairing(dc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pairEnterInput, dc, startPairing, log]);
 
   // 心跳机制
   const startHeartbeat = useCallback(() => {
@@ -826,6 +996,12 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         case 'file_chunk':
           void handleFileChunk(data);
           break;
+        case 'pair-commit':
+          void handlePairCommit(data, channel);
+          break;
+        case 'pair-reveal':
+          void handlePairReveal(data, channel);
+          break;
         default:
           // 未知/明文消息一律丢弃，杜绝降级到明文
           dev('收到未知类型的帧，已忽略');
@@ -833,7 +1009,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     };
 
     setDc(channel);
-  }, [log, resetSecureState, clearFileTransferState, sendIdentity, handleHello, handleCipher, handleFileChunk]);
+  }, [log, resetSecureState, clearFileTransferState, sendIdentity, handleHello, handleCipher, handleFileChunk, handlePairCommit, handlePairReveal]);
 
   // 早到的 ICE 候选可能先于 remoteDescription 抵达：先缓冲，设好远端描述后再补加。
   const addOrBufferCandidate = useCallback(async (target: RTCPeerConnection, cand: RTCIceCandidateInit) => {
@@ -962,9 +1138,17 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     const base = `${location.origin}${location.pathname}`;
     setRoomLink(`${base}#room=${roomId}&t=${token}`);
     setShowRoomDialog(true);
+    // host 启用配对码：生成高熵码并锁定本会话走配对验证（hello 会带 pairing 标志通知对端）。
+    if (usePairing) {
+      const code = generatePairingCode();
+      pairCodeRef.current = code;
+      pairRequiredRef.current = true;
+      setPairRequired(true);
+      setPairingCode(code);
+    }
     // 严格一对一：房间人数上限锁定为 2（满员后服务器拒绝其他人加入）
     await beginSession(true, roomId, token, 2);
-  }, [beginSession]);
+  }, [beginSession, usePairing]);
 
   // guest：用房间参数加入
   const joinRoom = useCallback(async (roomId: string, token: string) => {
@@ -973,15 +1157,24 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     await beginSession(false, roomId, token);
   }, [beginSession]);
 
-  // guest：手动粘贴房间链接加入
+  // guest：手动粘贴房间链接加入。可选预填配对码 → 本地声明持有，立即锁定 fail-closed，
+  // 不再依赖远端 hello/pair-commit 通知（防中间人剥离这些帧使本端静默退回手动 SAS）。
   const joinByPastedLink = useCallback(async () => {
     const parsed = parseRoomLink(inputCode.trim());
     if (!parsed) {
-      log('房间链接无效，应形如 https://…/#room=xxx&t=yyy', 'ERROR');
+      log(t.chat.p2p.invalidRoomLink, 'ERROR');
       return;
     }
+    const codeInput = normalizePairingCode(joinPairInput);
+    if (codeInput) {
+      if (!isValidPairingCode(codeInput)) { log(t.chat.p2p.pairMissingCode, 'WARN'); return; }
+      pairCodeRef.current = codeInput;
+      pairRequiredRef.current = true;   // 在 beginSession/sendIdentity 之前置真，使本端 hello 带 pairing 标志
+      setPairRequired(true);
+      setJoinPairInput('');
+    }
     await joinRoom(parsed.roomId, parsed.token);
-  }, [inputCode, joinRoom, log]);
+  }, [inputCode, joinPairInput, joinRoom, log]);
 
   // 打开页面时若 URL 带房间参数（分享链接），自动加入；随后清掉 hash 里的 token 避免泄漏到历史
   useEffect(() => {
@@ -1000,8 +1193,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       log(t.chat.p2p.notSecureYet, 'WARN');
       return;
     }
-    // 强制带外核对：在用户确认安全码一致前不允许发送，避免在未排除中间人的情况下泄露明文
-    if (!sasConfirmed) {
+    // 强制抗 MITM 门禁：配对模式须 pairVerified、否则须手动核对 SAS，未放行前不允许发送（防泄露明文）
+    if (!contentGateOpen(pairRequired, pairVerified, sasConfirmed)) {
       log(t.chat.p2p.verifySasFirst, 'WARN');
       return;
     }
@@ -1013,14 +1206,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       const { type, body } = await api.ratchet.encrypt(peerId, JSON.stringify({ t: message }));
       dc.send(JSON.stringify({ type: 'cipher', payload: { t: type, b: body } }));
       addMessage(message, 'sent');
+      void persistMessage(peerId, message, 'outgoing');
       setMessageInput('');
     } catch (error) {
       log(`${t.chat.sendFailed}: ${error}`, 'ERROR');
     }
-  }, [messageInput, dc, secureStatus, sasConfirmed, addMessage, log]);
+  }, [messageInput, dc, secureStatus, sasConfirmed, pairRequired, pairVerified, addMessage, persistMessage, log]);
 
   const sendFile = useCallback(async (file: File) => {
-    if (!dc || dc.readyState !== 'open' || connectionStatus !== 'connected' || secureStatus !== 'secure' || !sasConfirmed) {
+    const gateOk = contentGateOpen(pairRequired, pairVerified, sasConfirmed);
+    if (!dc || dc.readyState !== 'open' || connectionStatus !== 'connected' || secureStatus !== 'secure' || !gateOk) {
       log(t.chat.p2p.verifySasFirst, 'WARN');
       return;
     }
@@ -1092,7 +1287,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [connectionStatus, dc, dev, hasActiveFileTransfer, log, sasConfirmed, secureStatus, sendEncryptedControl, t.chat.p2p.file.busy, t.chat.p2p.file.cancelled, t.chat.p2p.file.failed, t.chat.p2p.file.offerFailed, t.chat.p2p.file.tooLarge, t.chat.p2p.verifySasFirst, updateFileTransfer, upsertFileTransfer]);
+  }, [connectionStatus, dc, dev, hasActiveFileTransfer, log, sasConfirmed, pairRequired, pairVerified, secureStatus, sendEncryptedControl, t.chat.p2p.file.busy, t.chat.p2p.file.cancelled, t.chat.p2p.file.failed, t.chat.p2p.file.offerFailed, t.chat.p2p.file.tooLarge, t.chat.p2p.verifySasFirst, updateFileTransfer, upsertFileTransfer]);
 
   const handleFileInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
@@ -1130,6 +1325,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     setConnectionStatus('disconnected');
     setRoomLink('');
     setShowRoomDialog(false);
+    // 彻底清除配对码会话设置（resetSecureState 故意保留它以便重连，断开时才清）
+    pairRequiredRef.current = false;
+    pairCodeRef.current = null;
+    pairSelfNonceRef.current = null;
+    if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
+    setPairRequired(false);
+    setPairingCode('');
+    setShowPairEnter(false);
+    setPairEnterInput('');
+    setJoinPairInput('');
     resetSecureState();
     clearFileTransferState();
     stopHeartbeat();
@@ -1194,7 +1399,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     }
   };
 
-  const canSendContent = connectionStatus === 'connected' && secureStatus === 'secure' && sasConfirmed;
+  const canSendContent = connectionStatus === 'connected' && secureStatus === 'secure' && contentGateOpen(pairRequired, pairVerified, sasConfirmed);
   const fileTransferBusy = fileTransfers.some(item => item.status === 'sending' || item.status === 'receiving');
   const myUserId = selfIdentityRef.current?.userId || userIdentity?.customId || '';
   const myIdentityLabel = formatIdentityLabel(t.chat.p2p.mePrefix, myName, myUserId);
@@ -1453,12 +1658,22 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <span style={styles.statusLight}></span>{getStatusText()}
           </span>
-          {secureStatus === 'secure' && sasConfirmed && (
+          {secureStatus === 'secure' && pairRequired && pairVerified && (
+            <span style={{ ...styles.secureBadge, background: '#27ae60' }} title={t.chat.p2p.pairVerifiedBadge}>
+              {t.chat.p2p.pairVerifiedBadge}
+            </span>
+          )}
+          {secureStatus === 'secure' && pairRequired && !pairVerified && (
+            <span style={{ ...styles.secureBadge, background: '#f39c12' }} title={t.chat.p2p.badgeEncryptedTitle}>
+              {t.chat.p2p.pairVerifyingBadge}
+            </span>
+          )}
+          {secureStatus === 'secure' && !pairRequired && sasConfirmed && (
             <span style={{ ...styles.secureBadge, background: '#27ae60' }} title={t.chat.p2p.badgeVerifiedTitle}>
               {t.chat.p2p.badgeVerified}
             </span>
           )}
-          {secureStatus === 'secure' && !sasConfirmed && (
+          {secureStatus === 'secure' && !pairRequired && !sasConfirmed && (
             <span style={{ ...styles.secureBadge, background: '#f39c12' }} title={t.chat.p2p.badgeEncryptedTitle}>
               {t.chat.p2p.badgePendingSas}
             </span>
@@ -1477,8 +1692,9 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         </div>
       </div>
 
-      {/* 安全码聚焦弹窗：连接已加密但尚未核对时，强制聚焦这一步（反正未确认也不能发消息） */}
-      {secureStatus === 'secure' && safetyCode && !sasConfirmed && (
+      {/* 安全码聚焦弹窗：连接已加密但尚未核对时，强制聚焦这一步（反正未确认也不能发消息）。
+          启用配对码时跳过此弹窗——改由配对码自动验证。 */}
+      {secureStatus === 'secure' && safetyCode && !sasConfirmed && !pairRequired && (
         <div style={styles.modal}>
           <div style={{ ...styles.modalContent, maxWidth: 440, textAlign: 'center' }}>
             <h3 style={{ margin: '0 0 6px' }}>{t.chat.p2p.sasDialogTitle}</h3>
@@ -1499,7 +1715,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
             <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
               <button
                 style={{ ...styles.btn, padding: '10px 22px', fontSize: 15 }}
-                onClick={() => { setSasConfirmed(true); pushToast(t.chat.p2p.sasConfirmedToast); }}
+                onClick={() => { sasConfirmedRef.current = true; setSasConfirmed(true); flushQueuedRx(); pushToast(t.chat.p2p.sasConfirmedToast); }}
               >
                 {t.chat.p2p.sasAgree}
               </button>
@@ -1514,8 +1730,20 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         </div>
       )}
 
-      {/* 已核对后的常驻安全码条（小字参考，绿色） */}
-      {secureStatus === 'secure' && safetyCode && sasConfirmed && (
+      {/* 配对码状态条：验证中 / 已验证（替代手动 SAS） */}
+      {secureStatus === 'secure' && pairRequired && (
+        <div style={styles.safetyBar}>
+          {pairVerified ? (
+            <span style={{ color: '#27ae60', fontWeight: 600 }}>{t.chat.p2p.pairVerifiedMark}</span>
+          ) : (
+            <span style={{ color: '#b9770e' }}>{t.chat.p2p.pairVerifyingBadge}</span>
+          )}
+          {peerInfo && <span style={{ color: '#666', overflowWrap: 'anywhere' }}>{formatIdentityLabel(t.chat.p2p.peerPrefix, peerInfo.nickname, peerInfo.userId)}</span>}
+        </div>
+      )}
+
+      {/* 已核对后的常驻安全码条（小字参考，绿色）；配对码模式下不显示 SAS 条 */}
+      {secureStatus === 'secure' && safetyCode && sasConfirmed && !pairRequired && (
         <div style={styles.safetyBar}>
           <span>{t.chat.p2p.sasBarLabel} <strong style={{ fontFamily: 'monospace', letterSpacing: 1 }}>{safetyCode}</strong></span>
           {peerInfo && <span style={{ color: '#666', overflowWrap: 'anywhere' }}>{formatIdentityLabel(t.chat.p2p.peerPrefix, peerInfo.nickname, peerInfo.userId)}</span>}
@@ -1534,6 +1762,15 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           {t.chat.p2p.createRoomBtn}
         </button>
         <span style={{ fontSize: 12, color: '#888' }}>{t.chat.p2p.oneToOneNote}</span>
+        <label style={{ fontSize: 12, color: '#555', display: 'inline-flex', alignItems: 'center', gap: 5, cursor: connectionStatus === 'disconnected' ? 'pointer' : 'not-allowed' }}>
+          <input
+            type="checkbox"
+            checked={usePairing}
+            disabled={connectionStatus !== 'disconnected'}
+            onChange={(e) => setUsePairing(e.target.checked)}
+          />
+          {t.chat.p2p.pairUseToggle}
+        </label>
         <button
           style={styles.btnSecondary}
           onClick={() => setShowJoinDialog(true)}
@@ -1567,9 +1804,41 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
             {t.chat.p2p.roomLinkWarning}
           </p>
+          {pairingCode && (
+            <div style={{ margin: '8px 0', padding: '8px 10px', background: '#eef9f1', border: '1px solid #cde9d6', borderRadius: 6 }}>
+              <div style={{ fontSize: 12, color: '#555', marginBottom: 4 }}>{t.chat.p2p.pairCodeLabel}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <code style={{ fontSize: 16, fontWeight: 700, letterSpacing: 1, color: '#2c7a4b' }}>{groupPairingCode(pairingCode)}</code>
+                <button style={{ ...styles.btnSecondary, padding: '4px 10px', fontSize: 12 }} onClick={() => copyToClipboard(groupPairingCode(pairingCode))}>{t.chat.p2p.copyLink}</button>
+              </div>
+              <p style={{ fontSize: 12, color: '#a05a00', margin: '6px 0 0' }}>{t.chat.p2p.pairShareHint}</p>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 10 }}>
             <button style={styles.btn} onClick={() => copyToClipboard(roomLink)}>{t.chat.p2p.copyLink}</button>
             <button style={styles.btnSecondary} onClick={() => setShowRoomDialog(false)}>{t.chat.p2p.collapse}</button>
+          </div>
+        </div>
+      )}
+
+      {/* 配对码输入弹窗（guest）：对端启用配对码且本端尚无码时，强制输入 */}
+      {showPairEnter && (
+        <div style={styles.modal}>
+          <div style={{ ...styles.modalContent, maxWidth: 440 }}>
+            <h3 style={{ marginTop: 0 }}>{t.chat.p2p.pairEnterTitle}</h3>
+            <p style={{ color: '#666', fontSize: 14 }}>{t.chat.p2p.pairEnterBody}</p>
+            <input
+              style={{ width: '100%', padding: '10px 12px', border: '2px solid #e9ecef', borderRadius: 8, fontFamily: 'monospace', fontSize: 15, boxSizing: 'border-box', letterSpacing: 1 }}
+              value={pairEnterInput}
+              onChange={(e) => setPairEnterInput(e.target.value)}
+              onKeyPress={(e) => { if (e.key === 'Enter') void confirmPairCode(); }}
+              placeholder={t.chat.p2p.pairEnterPlaceholder}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button style={styles.btnDanger} onClick={() => { setShowPairEnter(false); disconnect(); }}>{t.chat.p2p.cancel}</button>
+              <button style={styles.btn} onClick={() => void confirmPairCode()}>{t.chat.p2p.pairConfirmBtn}</button>
+            </div>
           </div>
         </div>
       )}
@@ -1718,8 +1987,15 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
               onChange={(e) => setInputCode(e.target.value)}
               placeholder="https://…/#room=xxx&t=yyy"
             />
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button style={styles.btnSecondary} onClick={() => { setShowJoinDialog(false); setInputCode(''); }}>
+            <div style={{ fontSize: 12, color: '#555', margin: '4px 0 4px' }}>{t.chat.p2p.pairJoinOptional}</div>
+            <input
+              style={{ width: '100%', padding: '8px 10px', border: '2px solid #e9ecef', borderRadius: 8, fontFamily: 'monospace', fontSize: 14, boxSizing: 'border-box', letterSpacing: 1 }}
+              value={joinPairInput}
+              onChange={(e) => setJoinPairInput(e.target.value)}
+              placeholder={t.chat.p2p.pairEnterPlaceholder}
+            />
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: 12 }}>
+              <button style={styles.btnSecondary} onClick={() => { setShowJoinDialog(false); setInputCode(''); setJoinPairInput(''); }}>
                 {t.chat.p2p.cancel}
               </button>
               <button style={styles.btn} onClick={joinByPastedLink}>

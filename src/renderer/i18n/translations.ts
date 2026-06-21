@@ -216,6 +216,7 @@ export interface Translations {
       serverConnectFailed: string;
       notSecureYet: string;
       verifySasFirst: string;
+      invalidRoomLink: string;
       disconnectedManual: string;
       copiedToClipboard: string;
       relayNotReady: string;
@@ -225,6 +226,22 @@ export interface Translations {
       sasConfirmedToast: string;
       setNicknamePrompt: string;
       clearDataConfirm: string;
+      // —— 配对码（自动抗 MITM）——
+      pairUseToggle: string;
+      pairCodeLabel: string;
+      pairShareHint: string;
+      pairEnterTitle: string;
+      pairEnterBody: string;
+      pairEnterPlaceholder: string;
+      pairConfirmBtn: string;
+      pairVerifyingBadge: string;
+      pairVerifiedBadge: string;
+      pairVerifiedMark: string;
+      pairBarLabel: string;
+      pairFailed: string;
+      pairMissingCode: string;
+      pairTimedOut: string;
+      pairJoinOptional: string;
       // —— 文件 / 图片传输 ——
       file: {
         attachTitle: string;
@@ -456,6 +473,7 @@ export const translations: Record<string, Translations> = {
         serverConnectFailed: '无法连接到服务器，请检查网络后重试。',
         notSecureYet: '安全通道尚未建立，无法发送消息',
         verifySasFirst: '请先与对方通过电话/当面核对安全码并确认一致，再发送消息',
+        invalidRoomLink: '房间链接无效，应形如 https://…/#room=xxx&t=yyy',
         disconnectedManual: '已断开连接',
         copiedToClipboard: '已复制到剪贴板',
         relayNotReady: '中继服务器未就绪，可能无法连接。如长时间连不上，请联系站点管理员。',
@@ -465,6 +483,21 @@ export const translations: Record<string, Translations> = {
         sasConfirmedToast: '已确认安全码一致，可以开始聊天',
         setNicknamePrompt: '设置你的昵称（对方会看到）：',
         clearDataConfirm: '清除本设备的全部本地数据？\n\n将删除本浏览器内保存的加密身份与所有本地数据，且不可恢复（服务器本就不存任何数据）。清除后回到「设置口令」从头开始。',
+        pairUseToggle: '用配对码自动验证（免手动核对安全码）',
+        pairCodeLabel: '配对码',
+        pairShareHint: '⚠️ 请通过【另一条可信渠道】（当面/电话/已加密的其他 App）把配对码告诉对方，切勿与上面的链接走同一渠道，否则形同虚设。',
+        pairEnterTitle: '🔑 输入配对码',
+        pairEnterBody: '对方启用了配对码验证。请输入对方通过可信渠道告知你的配对码，以自动确认无中间人。',
+        pairEnterPlaceholder: '例如 ABCD-1234-EFGH-…',
+        pairConfirmBtn: '确认',
+        pairVerifyingBadge: '🔒 已加密 · 配对码验证中',
+        pairVerifiedBadge: '🔐 配对码已验证',
+        pairVerifiedMark: '✓ 配对码已验证（自动抗中间人）',
+        pairBarLabel: '配对码验证：',
+        pairFailed: '配对码不匹配或存在中间人，已断开',
+        pairMissingCode: '请输入完整配对码（系统生成的那串）再继续',
+        pairTimedOut: '配对码验证超时，已断开（请确认双方用的是同一个码）',
+        pairJoinOptional: '配对码（可选；对方启用时填写，将自动验证免去手动核对安全码）',
         file: {
           attachTitle: '发送文件或图片',
           busy: '已有文件正在发送，请等当前文件传完再发下一个',
@@ -694,6 +727,7 @@ export const translations: Record<string, Translations> = {
         serverConnectFailed: 'Cannot connect to the server. Check your network and try again.',
         notSecureYet: 'The secure channel is not ready; cannot send messages',
         verifySasFirst: 'First verify the safety code with your peer by phone / in person and confirm it matches, then send messages',
+        invalidRoomLink: 'Invalid room link. It should look like https://…/#room=xxx&t=yyy',
         disconnectedManual: 'Disconnected',
         copiedToClipboard: 'Copied to clipboard',
         relayNotReady: 'The relay server is not ready and the connection may fail. If it stays unreachable, contact the site administrator.',
@@ -703,6 +737,21 @@ export const translations: Record<string, Translations> = {
         sasConfirmedToast: 'Safety code confirmed as matching — you can start chatting',
         setNicknamePrompt: 'Set your nickname (visible to your peer):',
         clearDataConfirm: 'Clear all local data on this device?\n\nThis deletes the encrypted identity and all local data saved in this browser, and cannot be undone (the server stores nothing anyway). Afterwards you return to “Set passphrase” and start over.',
+        pairUseToggle: 'Use a pairing code (auto-verify, no manual safety-code check)',
+        pairCodeLabel: 'Pairing code',
+        pairShareHint: '⚠️ Share the pairing code with your peer over a DIFFERENT trusted channel (in person / phone / another encrypted app) — never through the same channel as the link above, or it provides no protection.',
+        pairEnterTitle: '🔑 Enter pairing code',
+        pairEnterBody: 'Your peer enabled pairing-code verification. Enter the code they gave you over a trusted channel to automatically confirm there is no man-in-the-middle.',
+        pairEnterPlaceholder: 'e.g. ABCD-1234-EFGH-…',
+        pairConfirmBtn: 'Confirm',
+        pairVerifyingBadge: '🔒 Encrypted · verifying pairing code',
+        pairVerifiedBadge: '🔐 Pairing code verified',
+        pairVerifiedMark: '✓ Pairing code verified (auto anti-MITM)',
+        pairBarLabel: 'Pairing code:',
+        pairFailed: 'Pairing code mismatch or man-in-the-middle — disconnected',
+        pairMissingCode: 'Enter the full pairing code (the system-generated one) first',
+        pairTimedOut: 'Pairing verification timed out — disconnected (check both sides use the same code)',
+        pairJoinOptional: 'Pairing code (optional; fill in if your peer enabled it — auto-verifies, no manual safety-code check)',
         file: {
           attachTitle: 'Send a file or photo',
           busy: 'A file is already being sent — wait for it to finish before sending another',
@@ -932,6 +981,7 @@ export const translations: Record<string, Translations> = {
         serverConnectFailed: 'サーバーに接続できません。ネットワークを確認して再試行してください。',
         notSecureYet: 'セキュアチャネルが未確立のためメッセージを送信できません',
         verifySasFirst: 'まず電話・対面で相手と安全コードを照合し一致を確認してからメッセージを送信してください',
+        invalidRoomLink: 'ルームリンクが無効です。https://…/#room=xxx&t=yyy の形式である必要があります',
         disconnectedManual: '切断しました',
         copiedToClipboard: 'クリップボードにコピーしました',
         relayNotReady: '中継サーバーの準備ができておらず接続できない可能性があります。長時間つながらない場合はサイト管理者にお問い合わせください。',
@@ -941,6 +991,21 @@ export const translations: Record<string, Translations> = {
         sasConfirmedToast: '安全コードの一致を確認しました。チャットを開始できます',
         setNicknamePrompt: 'ニックネームを設定してください（相手に表示されます）：',
         clearDataConfirm: 'この端末のすべてのローカルデータを消去しますか？\n\nこのブラウザに保存された暗号化身元とすべてのローカルデータを削除し、元に戻せません（サーバーには元々何も保存されていません）。消去後は「パスフレーズを設定」に戻って最初からやり直します。',
+        pairUseToggle: 'ペアリングコードで自動検証（安全コードの手動照合が不要）',
+        pairCodeLabel: 'ペアリングコード',
+        pairShareHint: '⚠️ ペアリングコードは【別の信頼できる経路】（対面・電話・他の暗号化アプリ）で相手に伝えてください。上のリンクと同じ経路で送ると意味がありません。',
+        pairEnterTitle: '🔑 ペアリングコードを入力',
+        pairEnterBody: '相手がペアリングコード検証を有効にしています。信頼できる経路で受け取ったコードを入力すると、中間者がいないことを自動で確認します。',
+        pairEnterPlaceholder: '例：ABCD-1234-EFGH-…',
+        pairConfirmBtn: '確認',
+        pairVerifyingBadge: '🔒 暗号化済み · ペアリングコード検証中',
+        pairVerifiedBadge: '🔐 ペアリングコード検証済み',
+        pairVerifiedMark: '✓ ペアリングコード検証済み（中間者を自動排除）',
+        pairBarLabel: 'ペアリングコード検証：',
+        pairFailed: 'ペアリングコードが一致しないか中間者の疑い。切断しました。',
+        pairMissingCode: '完全なペアリングコード（システム生成のもの）を入力してください',
+        pairTimedOut: 'ペアリング検証がタイムアウトしたため切断しました（双方が同じコードか確認してください）',
+        pairJoinOptional: 'ペアリングコード（任意。相手が有効化した場合に入力。安全コードの手動照合が不要になります）',
         file: {
           attachTitle: 'ファイルまたは写真を送信',
           busy: '送信中のファイルがあります。完了してから次を送ってください',
@@ -1170,6 +1235,7 @@ export const translations: Record<string, Translations> = {
         serverConnectFailed: 'No se puede conectar al servidor. Revisa tu red e inténtalo de nuevo.',
         notSecureYet: 'El canal seguro no está listo; no se pueden enviar mensajes',
         verifySasFirst: 'Primero verifica el código de seguridad con tu par por teléfono / en persona y confirma que coincide, luego envía mensajes',
+        invalidRoomLink: 'Enlace de sala no válido. Debe verse como https://…/#room=xxx&t=yyy',
         disconnectedManual: 'Desconectado',
         copiedToClipboard: 'Copiado al portapapeles',
         relayNotReady: 'El servidor de retransmisión no está listo y la conexión puede fallar. Si sigue sin estar disponible, contacta al administrador del sitio.',
@@ -1179,6 +1245,21 @@ export const translations: Record<string, Translations> = {
         sasConfirmedToast: 'Código de seguridad confirmado como coincidente: puedes empezar a chatear',
         setNicknamePrompt: 'Configura tu apodo (visible para tu par):',
         clearDataConfirm: '¿Borrar todos los datos locales de este dispositivo?\n\nEsto elimina la identidad cifrada y todos los datos locales guardados en este navegador, y no se puede deshacer (el servidor no almacena nada de todos modos). Después vuelves a «Establecer contraseña» y empiezas de nuevo.',
+        pairUseToggle: 'Usar un código de emparejamiento (verificación automática, sin cotejo manual)',
+        pairCodeLabel: 'Código de emparejamiento',
+        pairShareHint: '⚠️ Comparte el código de emparejamiento con tu par por un canal de confianza DISTINTO (en persona / teléfono / otra app cifrada); nunca por el mismo canal que el enlace de arriba, o no protege nada.',
+        pairEnterTitle: '🔑 Introduce el código de emparejamiento',
+        pairEnterBody: 'Tu par activó la verificación por código de emparejamiento. Introduce el código que te dio por un canal de confianza para confirmar automáticamente que no hay intermediario.',
+        pairEnterPlaceholder: 'p. ej. ABCD-1234-EFGH-…',
+        pairConfirmBtn: 'Confirmar',
+        pairVerifyingBadge: '🔒 Cifrado · verificando código de emparejamiento',
+        pairVerifiedBadge: '🔐 Código de emparejamiento verificado',
+        pairVerifiedMark: '✓ Código de emparejamiento verificado (anti-MITM automático)',
+        pairBarLabel: 'Código de emparejamiento:',
+        pairFailed: 'Código de emparejamiento incorrecto o intermediario: desconectado',
+        pairMissingCode: 'Introduce primero el código de emparejamiento completo (el generado por el sistema)',
+        pairTimedOut: 'La verificación del emparejamiento expiró: desconectado (comprueba que ambos usáis el mismo código)',
+        pairJoinOptional: 'Código de emparejamiento (opcional; rellénalo si tu par lo activó — verifica automáticamente, sin cotejo manual)',
         file: {
           attachTitle: 'Enviar un archivo o foto',
           busy: 'Ya se está enviando un archivo; espera a que termine antes de enviar otro',
