@@ -71,7 +71,9 @@ export default {
       return turnCredentials(request, env);
     }
 
-    // WebSocket 升级 → 路由到房间 DO
+    // WebSocket 升级 → 路由到房间 DO。
+    // 注:房间 token 爆破由 DO 内「失败 join 限流」(每 IP 10 次/分钟)挡住;
+    // 连接洪泛(海量 WS 建连)建议在 Cloudflare 仪表盘配 WAF/Rate Limiting 规则在边缘拦截。
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
       if (!isOriginAllowed(origin, env)) {
         return new Response('Origin not allowed', { status: 403 });

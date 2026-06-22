@@ -35,10 +35,11 @@ describe('room code (自定义房间号)', () => {
   });
 
   it('isValidRoomCode 拒绝短码（< 最小长度）', () => {
-    expect(MIN_ROOM_CODE_LENGTH).toBe(6);
+    expect(MIN_ROOM_CODE_LENGTH).toBe(8);
     expect(isValidRoomCode('abc')).toBe(false);
     expect(isValidRoomCode('  ab  ')).toBe(false);
-    expect(isValidRoomCode('abcdef')).toBe(true);
+    expect(isValidRoomCode('abcdef')).toBe(false);   // 6 < 8
+    expect(isValidRoomCode('abcdefgh')).toBe(true);  // 8
     expect(isValidRoomCode('cafe-meetup-42')).toBe(true);
   });
 

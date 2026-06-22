@@ -50,8 +50,12 @@ export function generateRoomCredentials(): { roomId: string; token: string } {
   return { roomId: rand(10), token: rand(32) };
 }
 
-/** 自定义房间号最小长度（降低被随意猜中的概率；机密性仍靠 SAS/配对码核对，见下）。 */
-export const MIN_ROOM_CODE_LENGTH = 6;
+/**
+ * 自定义房间号最小长度。在线爆破已由信令侧「失败 join 限流」挡住（每 IP 10 次/分钟，
+ * Cloudflare DO 与 node 服务器均有），此长度作纵深防御，降低被随手猜中的概率；
+ * 真正的机密性仍靠握手后强制的 SAS 带外核对 / 配对码（见 deriveRoomCredentials 注释）。
+ */
+export const MIN_ROOM_CODE_LENGTH = 8;
 
 /** 归一化用户输入的房间号：去首尾空白、合并内部空白、转小写——两端约定同一个号即可连上。 */
 export function normalizeRoomCode(code: string): string {
