@@ -1,0 +1,3 @@
+# wrangler / miniflare 构建产物与本地状态
+.wrangler/
+node_modules/
