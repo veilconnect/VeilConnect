@@ -3,7 +3,10 @@
   "version": "2.0.1",
   "description": "VeilConnect - 可自部署的网页端到端加密聊天（P2P / WebRTC / Double Ratchet）",
   "license": "MIT",
-  "author": "VeilConnect Team",
+  "author": {
+    "name": "VeilConnect Team",
+    "email": "releases@veilconnect.org"
+  },
   "scripts": {
     "build:web": "webpack --config webpack.web.config.js --mode production",
     "build": "npm run build:web",
