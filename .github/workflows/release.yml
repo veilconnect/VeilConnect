@@ -57,12 +57,17 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # 无 mac 证书时禁用「自动发现签名身份」，强制出未签名包（避免误用 runner 钥匙串）。
-          if [ -z "${CSC_LINK:-}" ]; then export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
+          # 无 mac 证书时禁用「自动发现签名身份」并显式置空身份（mac.identity=null →
+          # 走 ad-hoc 签名，避免 electron-builder 解析签名身份时报「not a file」），强制出未签名包。
+          UNSIGNED_FLAG=""
+          if [ -z "${CSC_LINK:-}" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            UNSIGNED_FLAG="-c.mac.identity=null"
+          fi
           # 公证仅在提供了 Apple 凭据时启用。
           NOTARIZE_FLAG=""
           if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then NOTARIZE_FLAG="-c.mac.notarize=true"; fi
-          npx electron-builder --config electron-builder.yml --publish never $NOTARIZE_FLAG
+          npx electron-builder --config electron-builder.yml --publish never $NOTARIZE_FLAG $UNSIGNED_FLAG
 
       - name: List artifacts
         shell: bash
