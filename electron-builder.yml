@@ -35,9 +35,12 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   # 默认不公证（未签名开发版）。配好 Apple 证书后，release 工作流会注入 APPLE_* 并启用公证。
   notarize: false
+  # universal:单个二进制同时支持 Intel(x64) 与 Apple Silicon(arm64),用户只需下一个文件。
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: universal
+    - target: zip
+      arch: universal
 
 win:
   target:

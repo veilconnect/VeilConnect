@@ -50,28 +50,41 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # —— 代码签名（配好以下仓库 Secret 即自动启用；缺省则出未签名包）——
-          # macOS: CSC_LINK(.p12 base64)+CSC_KEY_PASSWORD；公证: APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID
-          # Windows: CSC_LINK+CSC_KEY_PASSWORD（或 Azure Trusted Signing）
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # —— 代码签名(配好对应仓库 Secret 即【自动】启用;缺省则该平台出未签名包)——
+          # 按平台分开放证书,避免 mac/win 共用一个 CSC_LINK 互相串(见 docs/security/CODE_SIGNING.md):
+          #   mac 签名:  MAC_CSC_LINK(.p12 的 base64) + MAC_CSC_KEY_PASSWORD
+          #   mac 公证:  APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+          #   win 签名:  WIN_CSC_LINK(.pfx 的 base64) + WIN_CSC_KEY_PASSWORD
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # 无 mac 证书时禁用「自动发现签名身份」并显式置空身份（mac.identity=null →
-          # 走 ad-hoc 签名，避免 electron-builder 解析签名身份时报「not a file」），强制出未签名包。
-          UNSIGNED_FLAG=""
-          if [ -z "${CSC_LINK:-}" ]; then
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-            UNSIGNED_FLAG="-c.mac.identity=null"
-          fi
-          # 公证仅在提供了 Apple 凭据时启用。
-          NOTARIZE_FLAG=""
-          if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then NOTARIZE_FLAG="-c.mac.notarize=true"; fi
+          set -euo pipefail
+          EXTRA=""
+          case "${{ matrix.os }}" in
+            macos-latest)
+              # 把 mac 专用证书喂给 electron-builder 通用变量(仅本平台,不串到 win)。
+              export CSC_LINK="${MAC_CSC_LINK:-}"; export CSC_KEY_PASSWORD="${MAC_CSC_KEY_PASSWORD:-}"
+              if [ -z "$CSC_LINK" ]; then
+                # 无 mac 证书:禁用自动发现 + identity=null 出 ad-hoc 未签名包(避免解析签名身份报「not a file」)。
+                export CSC_IDENTITY_AUTO_DISCOVERY=false
+                EXTRA="-c.mac.identity=null"
+              elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+                EXTRA="-c.mac.notarize=true"   # 有证书 + Apple 凭据 → 签名后公证
+              fi
+              ;;
+            windows-latest)
+              export CSC_LINK="${WIN_CSC_LINK:-}"; export CSC_KEY_PASSWORD="${WIN_CSC_KEY_PASSWORD:-}"
+              # 无 win 证书时 electron-builder 自动出未签名 exe,无需额外 flag。
+              ;;
+          esac
           # 用 desktop-build/ 里【锁定】的 electron-builder(cwd 仍是仓库根 → 打包根项目;
           # 二进制按自身位置解析依赖 → 走隔离的锁定树)。
-          "$GITHUB_WORKSPACE/desktop-build/node_modules/.bin/electron-builder" --config electron-builder.yml --publish never $NOTARIZE_FLAG $UNSIGNED_FLAG
+          "$GITHUB_WORKSPACE/desktop-build/node_modules/.bin/electron-builder" --config electron-builder.yml --publish never $EXTRA
 
       - name: List artifacts
         shell: bash
