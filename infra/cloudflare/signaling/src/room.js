@@ -48,9 +48,17 @@ export class SignalingRoom {
     return b.count >= MAX_FAILED_JOINS;
   }
 
+  // 清理过期的失败计数项（防止多 IP 攻击把 Map 撑大）。
+  sweepFailedJoins(now) {
+    for (const [ip, b] of this.failedJoins) {
+      if (now - b.windowStart > RATE_WINDOW_MS) this.failedJoins.delete(ip);
+    }
+  }
+
   // 记录一次失败的 join 尝试。
   recordFailedJoin(ip) {
     const now = Date.now();
+    this.sweepFailedJoins(now);
     const b = this.failedJoins.get(ip);
     if (!b || now - b.windowStart > RATE_WINDOW_MS) { this.failedJoins.set(ip, { count: 1, windowStart: now }); return; }
     b.count++;
@@ -127,7 +135,7 @@ export class SignalingRoom {
 
     const occupants = this.occupants();
     if (occupants >= this.maxClients) {
-      this.recordFailedJoin(ip);
+      // 满员不计入失败 join：token 正确的合法用户撞满房不应被误限流（Codex 复审指出）。
       return this.send(ws, { type: 'error', error: 'Room full' });
     }
     client.roomId = roomId;

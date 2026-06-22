@@ -78,12 +78,16 @@ jobs:
       - name: Generate checksums
         shell: bash
         run: |
-          cd release 2>/dev/null || exit 0
-          files=$(ls *.dmg *.zip *.exe *.AppImage *.deb 2>/dev/null || true)
-          [ -z "$files" ] && { echo "no artifacts"; exit 0; }
-          if command -v sha256sum >/dev/null 2>&1; then sha256sum $files > "SHA256SUMS-${{ matrix.os }}.txt";
-          else shasum -a 256 $files > "SHA256SUMS-${{ matrix.os }}.txt"; fi
-          cat "SHA256SUMS-${{ matrix.os }}.txt"
+          cd release 2>/dev/null || { echo "no release dir"; exit 0; }
+          shopt -s nullglob
+          out="SHA256SUMS-${{ matrix.os }}.txt"
+          : > "$out"
+          # 逐文件加引号处理:electron-builder 的 NSIS 默认文件名含空格(如 "VeilConnect Setup 2.0.1.exe"),
+          # 直接 `sha256sum $files` 会被按空格拆词导致 Windows 上失败。
+          for f in *.dmg *.zip *.exe *.AppImage *.deb; do
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$f" >> "$out"; else shasum -a 256 "$f" >> "$out"; fi
+          done
+          cat "$out"
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
