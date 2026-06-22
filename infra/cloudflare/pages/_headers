@@ -2,6 +2,7 @@
 # connect-src 收敛到本站 + 信令 Worker（WS 信令 + /turn-credentials 拉取）；
 # WebRTC 的 STUN/TURN(UDP) 不受 CSP 约束，无需在此列出 turn.cloudflare.com。
 /*
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://signal.veilconnect.org wss://signal.veilconnect.org; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'

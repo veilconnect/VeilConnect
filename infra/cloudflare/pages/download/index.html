@@ -26,6 +26,7 @@
   .btn { display:inline-block; text-decoration:none; padding:8px 14px; border-radius:8px; font-size:14px; font-weight:600; }
   .btn.primary { background:linear-gradient(135deg,var(--p1),var(--p2)); color:#fff; }
   .btn.ghost { border:1px solid #cdd2e4; color:#5a4bd0; }
+  .btn.disabled { border:1px solid #e0e0e8; color:#9a9aa8; background:#f3f3f7; }
   .badge { display:inline-block; font-size:12px; color:#a05a00; background:#fff3cd; border-radius:6px; padding:2px 8px; margin-left:6px; }
   pre { background:#0f1320; color:#d8e0ff; padding:12px 14px; border-radius:8px; overflow:auto; font-size:13px; }
   .trust { background:#fff7e6; border:1px solid #ffe2a8; border-radius:12px; padding:16px 18px; }
@@ -54,9 +55,9 @@
       </div>
       <div class="card">
         <h3>🖥️ 桌面版 <span class="badge">未签名预览</span></h3>
-        <p>私钥由操作系统钥匙串保护、只加载随安装包分发的本地代码(信任更强,不依赖服务器下发脚本)。mac/win/linux 安装包见 Releases;当前为未签名预览版,签名版随后跟进。</p>
-        <a class="btn primary" href="https://github.com/veilconnect/VeilConnect/releases">下载安装包</a>
-        <a class="btn ghost" href="https://github.com/veilconnect/VeilConnect/blob/main/docs/DESKTOP_BUILD.md" style="margin-left:6px">从源码构建</a>
+        <p>私钥由操作系统钥匙串保护、只加载随安装包分发的本地代码(信任更强,不依赖服务器下发脚本)。预编译的 mac/win/linux 安装包正在准备中;在此之前可直接从源码构建,签名版随后跟进。</p>
+        <a class="btn primary" href="https://github.com/veilconnect/VeilConnect/blob/main/docs/DESKTOP_BUILD.md">从源码构建</a>
+        <a class="btn disabled" href="https://github.com/veilconnect/VeilConnect/releases" style="margin-left:6px">下载安装包(即将推出)</a>
       </div>
       <div class="card">
         <h3>🔧 自己部署</h3>
