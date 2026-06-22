@@ -90,7 +90,8 @@ docker compose up -d --build
 
 ```bash
 # 终端 1：构建并起信令服务器（本地同源）
-npm install && npm run build:web
+npm install && npm run build:web        # 根依赖 + 构建网页 SPA → server/public
+(cd server && npm install)              # 信令服务器是独立包，有自己的依赖（express/ws/cors）
 ALLOWED_ORIGINS="http://localhost:3001" PORT=3001 npm run serve
 # 浏览器开两个标签访问 http://localhost:3001
 #   localhost 是安全上下文豁免，WebCrypto 可用
