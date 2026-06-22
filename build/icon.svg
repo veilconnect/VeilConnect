@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#667eea"/>
+      <stop offset="1" stop-color="#764ba2"/>
+    </linearGradient>
+  </defs>
+  <!-- 背景:品牌渐变圆角方(squircle 风) -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#bg)"/>
+  <!-- 挂锁:象征端到端加密 -->
+  <g fill="none" stroke="#ffffff" stroke-width="64" stroke-linecap="round">
+    <!-- 锁梁 -->
+    <path d="M392 486 V 414 a 120 120 0 0 1 240 0 V 486"/>
+  </g>
+  <!-- 锁体 -->
+  <rect x="320" y="470" width="384" height="332" rx="64" ry="64" fill="#ffffff"/>
+  <!-- 锁孔 -->
+  <circle cx="512" cy="606" r="46" fill="#6f51b4"/>
+  <path d="M492 606 h40 l-14 120 h-12 z" fill="#6f51b4"/>
+</svg>

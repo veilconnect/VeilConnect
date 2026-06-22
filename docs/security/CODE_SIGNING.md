@@ -62,7 +62,39 @@ git push origin v2.0.3        # 触发 release.yml：检测到 Secret → 自动
 发布后到 Release 页确认安装包已签名(mac:`spctl -a -vv App.app` 应显示 accepted;
 win:右键属性→数字签名应有有效签名)。
 
-## Windows 备选:Azure Trusted Signing
+## Windows 推荐:Azure Trusted Signing（免自管 .pfx）
 
-不想自管 `.pfx` 可改用 Azure Trusted Signing(electron-builder 支持)。需在打包步骤改用
-`azureSignOptions` 并提供 `AZURE_*` 凭据。本仓库默认走 `.pfx` 路径;如需切换告知维护者。
+流水线已**接好** Azure Trusted Signing,且**优先于** `.pfx`:Windows job 检测到下面的 Azure 配置即走
+Azure 签名,否则回退 `WIN_CSC_LINK`,再否则未签名。Azure 由微软托管证书,无需你保管 `.pfx`。
+
+需要的 Secret（机密 + 配置）：
+
+| Secret | 类型 | 内容 |
+|---|---|---|
+| `AZURE_TENANT_ID` | 机密 | 服务主体的租户 ID |
+| `AZURE_CLIENT_ID` | 机密 | 服务主体(App 注册)的 Client ID |
+| `AZURE_CLIENT_SECRET` | 机密 | 服务主体密钥（electron-builder 用 DefaultAzureCredential 读取这三者） |
+| `AZURE_ENDPOINT` | 配置 | Trusted Signing 账户区域端点，如 `https://eus.codesigning.azure.net/` |
+| `AZURE_CODE_SIGNING_ACCOUNT_NAME` | 配置 | Trusted Signing 账户名 |
+| `AZURE_CERT_PROFILE_NAME` | 配置 | 证书配置文件名 |
+| `AZURE_PUBLISHER_NAME` | 配置 | 证书里的发布者名（可选，用于校验） |
+
+准备步骤（一次性）：在 Azure 建 **Trusted Signing 账户**与**证书配置文件**,完成身份验证;创建一个
+**服务主体**并授予该账户的 “Trusted Signing Certificate Profile Signer” 角色;把上面三项凭据 + 四项配置写入仓库 Secret。
+
+```bash
+gh secret set AZURE_TENANT_ID --body '...'
+gh secret set AZURE_CLIENT_ID --body '...'
+gh secret set AZURE_CLIENT_SECRET --body '...'
+gh secret set AZURE_ENDPOINT --body 'https://eus.codesigning.azure.net/'
+gh secret set AZURE_CODE_SIGNING_ACCOUNT_NAME --body '...'
+gh secret set AZURE_CERT_PROFILE_NAME --body '...'
+gh secret set AZURE_PUBLISHER_NAME --body 'CN=...'   # 可选
+```
+
+> ⚠️ **首次启用请先验证**:本仓库维护者无 Azure 账户、无法预先实跑这条路径。配好后请先用一个测试 tag
+> 触发一次,确认 Windows job 通过、`.exe` 数字签名有效(右键属性→数字签名)。若 electron-builder 提示
+> 缺少签名工具,按其报错与 electron-builder 当前版本的 Azure Trusted Signing 文档补齐对应 helper 即可——
+> 流水线的配置注入(`win.azureSignOptions`)与凭据传递已就位,无需改结构。
+
+只配 Azure 就**不要**再设 `WIN_CSC_LINK`(避免歧义);两者同时存在时流水线**优先 Azure**。

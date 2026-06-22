@@ -54,7 +54,10 @@ jobs:
           # 按平台分开放证书,避免 mac/win 共用一个 CSC_LINK 互相串(见 docs/security/CODE_SIGNING.md):
           #   mac 签名:  MAC_CSC_LINK(.p12 的 base64) + MAC_CSC_KEY_PASSWORD
           #   mac 公证:  APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
-          #   win 签名:  WIN_CSC_LINK(.pfx 的 base64) + WIN_CSC_KEY_PASSWORD
+          #   win 签名(二选一,优先 Azure):
+          #     A) Azure Trusted Signing(推荐,免自管证书):AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET
+          #        + 非机密配置 AZURE_ENDPOINT/AZURE_CODE_SIGNING_ACCOUNT_NAME/AZURE_CERT_PROFILE_NAME/AZURE_PUBLISHER_NAME
+          #     B) 传统证书:WIN_CSC_LINK(.pfx 的 base64) + WIN_CSC_KEY_PASSWORD
           MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
@@ -62,6 +65,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Azure Trusted Signing：凭据(机密)+ 配置(非机密，用 secret 仅为不写进文件)
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
+          AZURE_CERT_PROFILE_NAME: ${{ secrets.AZURE_CERT_PROFILE_NAME }}
+          AZURE_PUBLISHER_NAME: ${{ secrets.AZURE_PUBLISHER_NAME }}
         run: |
           set -euo pipefail
           EXTRA=""
@@ -78,8 +89,15 @@ jobs:
               fi
               ;;
             windows-latest)
-              export CSC_LINK="${WIN_CSC_LINK:-}"; export CSC_KEY_PASSWORD="${WIN_CSC_KEY_PASSWORD:-}"
-              # 无 win 证书时 electron-builder 自动出未签名 exe,无需额外 flag。
+              if [ -n "${AZURE_CODE_SIGNING_ACCOUNT_NAME:-}" ] && [ -n "${AZURE_CERT_PROFILE_NAME:-}" ] && [ -n "${AZURE_ENDPOINT:-}" ]; then
+                # Azure Trusted Signing(优先):凭据走 AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET(electron-builder
+                # 用 DefaultAzureCredential 读取);配置经 -c 覆盖注入 win.azureSignOptions。免自管 .pfx。
+                EXTRA="-c.win.azureSignOptions.endpoint=${AZURE_ENDPOINT} -c.win.azureSignOptions.codeSigningAccountName=${AZURE_CODE_SIGNING_ACCOUNT_NAME} -c.win.azureSignOptions.certificateProfileName=${AZURE_CERT_PROFILE_NAME}"
+                if [ -n "${AZURE_PUBLISHER_NAME:-}" ]; then EXTRA="$EXTRA -c.win.azureSignOptions.publisherName=${AZURE_PUBLISHER_NAME}"; fi
+              elif [ -n "${WIN_CSC_LINK:-}" ]; then
+                export CSC_LINK="$WIN_CSC_LINK"; export CSC_KEY_PASSWORD="${WIN_CSC_KEY_PASSWORD:-}"
+              fi
+              # 都没配 → electron-builder 自动出未签名 exe。
               ;;
           esac
           # 用 desktop-build/ 里【锁定】的 electron-builder(cwd 仍是仓库根 → 打包根项目;
