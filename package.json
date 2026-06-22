@@ -29,7 +29,8 @@
     "build:electron-renderer": "webpack --config webpack.web.config.js --mode production --env outDir=dist/renderer",
     "build:electron": "npm run build:electron-renderer && npm run build:electron-main",
     "electron:dev": "npm run build:electron && electron dist/electron/electron/main.js",
-    "dist": "npm run build:electron && electron-builder --config electron-builder.yml"
+    "desktop:deps": "npm ci --prefix desktop-build",
+    "dist": "npm run build:electron && ./desktop-build/node_modules/.bin/electron-builder --config electron-builder.yml"
   },
   "main": "dist/electron/electron/main.js",
   "dependencies": {

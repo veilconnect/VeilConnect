@@ -37,9 +37,10 @@ jobs:
       - name: Install dependencies
         run: npm ci --omit=optional
 
-      - name: Install electron-builder
-        # 钉死版本(供应链):避免构建时拉到被投毒的最新版注入安装包。升级需显式改此处。
-        run: npm i -D electron-builder@25.1.8 --no-save
+      # 桌面打包依赖隔离在 desktop-build/(独立 package-lock.json,全树锁定+integrity);
+      # npm ci 逐包校验,堵住 electron-builder 传递依赖的供应链口子。不污染根/网页贡献者的安装。
+      - name: Install desktop build deps (pinned lockfile)
+        run: npm ci --prefix desktop-build
 
       # 渲染端(dist/renderer，信令已烘焙) + 主进程(dist/electron)
       - name: Build renderer + main process
@@ -68,7 +69,9 @@ jobs:
           # 公证仅在提供了 Apple 凭据时启用。
           NOTARIZE_FLAG=""
           if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then NOTARIZE_FLAG="-c.mac.notarize=true"; fi
-          npx electron-builder --config electron-builder.yml --publish never $NOTARIZE_FLAG $UNSIGNED_FLAG
+          # 用 desktop-build/ 里【锁定】的 electron-builder(cwd 仍是仓库根 → 打包根项目;
+          # 二进制按自身位置解析依赖 → 走隔离的锁定树)。
+          "$GITHUB_WORKSPACE/desktop-build/node_modules/.bin/electron-builder" --config electron-builder.yml --publish never $NOTARIZE_FLAG $UNSIGNED_FLAG
 
       - name: List artifacts
         shell: bash
