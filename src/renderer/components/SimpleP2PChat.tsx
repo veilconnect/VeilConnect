@@ -212,6 +212,9 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   // startPairing / enterPairingMode 在文件后段定义，handleHello 在前段，用 ref 指针打破顺序依赖。
   const startPairingRef = useRef<((channel: RTCDataChannel) => Promise<void>) | null>(null);
   const enterPairingModeRef = useRef<(() => void) | null>(null);
+  // 早于 handleHello 完成(peerId 未设)到达的密文先缓冲,握手完成后重放——防 {c:'init'} 因竞态丢失。
+  const pendingCipherRef = useRef<any[]>([]);
+  const handleCipherRef = useRef<((payload: any) => void) | null>(null);
 
   // WebRTC ICE 服务器与中继策略。为「尽量安全、不被中国相关方截获元数据」：
   // - relayOnly 默认开启：只用 TURN 的 relay 候选，隐藏双方真实 IP，邀请码(SDP)里也不出现真实 IP；
@@ -307,6 +310,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     historyLoadedRef.current = null;
     sasConfirmedRef.current = false;
     queuedRxRef.current = [];
+    pendingCipherRef.current = [];
     peerBoxKeyRef.current = null;
     // 配对码会话状态（保留 host 已生成的 pairCode/pairRequired 设置直到真正断开，避免重连丢失）
     pairVerifiedRef.current = false;
@@ -668,7 +672,21 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
 
   // 收到对端身份包：强制验证身份绑定 + ratchet 密钥签名，任一失败即视为中间人攻击并断开
   const handleHello = useCallback(async (bundle: any, channel: RTCDataChannel) => {
-    const self = selfIdentityRef.current;
+    // 健壮性:确保本机身份已载入再继续——否则(慢设备上 onopen 早于身份加载完成)self 为 null,
+    // 会跳过 safetyCode 计算/配对设置,导致即便已 secure 也永不弹安全码(SAS 卡死)。
+    let self = selfIdentityRef.current;
+    if (!self) {
+      try {
+        const id = await (window as any).electronAPI?.identity?.getCurrentIdentity?.();
+        if (id) {
+          selfIdentityRef.current = {
+            userId: id.userId, publicKey: id.publicKey, boxPublicKey: id.boxPublicKey,
+            keyBindingSignature: id.keyBindingSignature, nickname: id.nickname
+          };
+          self = selfIdentityRef.current;
+        }
+      } catch { /* 取不到则按原逻辑继续(后续条件判断会兜底) */ }
+    }
     try {
       if (!bundle?.boxPublicKey || !bundle?.keyBindingSignature) {
         throw new Error('对方未提供加密公钥绑定');
@@ -709,6 +727,14 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         setSecureStatus('pending');
         log(t.chat.p2p.e2eEstablishing);
         dev(`ratchet pending as responder, peer=${String(peer.userId).slice(0, 12)}…`);
+      }
+
+      // 重放在 handleHello 完成前缓冲的早到密文(如竞态先到的 {c:'init'}),现在 peerId 已就绪可解密。
+      if (pendingCipherRef.current.length) {
+        const buffered = pendingCipherRef.current;
+        pendingCipherRef.current = [];
+        dev(`replaying ${buffered.length} buffered cipher(s)`);
+        for (const p of buffered) void handleCipherRef.current?.(p);
       }
 
       // —— 配对码（自动抗 MITM）——
@@ -763,19 +789,28 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   }, [addMessage, persistMessage, handleFileOffer]);
 
   const handleCipher = useCallback(async (payload: any) => {
+    if (!payload || typeof payload.t !== 'number') {
+      dev('密文格式错误，已丢弃');
+      return;
+    }
     const peerId = peerIdRef.current;
-    if (!peerId || !payload || typeof payload.t !== 'number') {
-      dev('安全通道未建立或密文格式错误，已丢弃');
+    if (!peerId) {
+      // handleHello 尚未完成(peerId 未设):缓冲早到密文,握手完成后由 handleHello 重放,
+      // 避免发起方的 {c:'init'} 因竞态先到而被丢弃 → responder 永停 pending、永不弹安全码。
+      if (pendingCipherRef.current.length < 64) pendingCipherRef.current.push(payload);
+      dev('密文早于握手完成,已缓冲待重放');
       return;
     }
     try {
       const api = (window as any).electronAPI;
       // type 3（prekey 消息）会在接收方建立入站会话
       const plain = await api.ratchet.decrypt(peerId, payload.t, payload.b);
+      // 健壮性:能成功解密即证明入站安全信道已建立 → 确保转入 secure(幂等)。
+      // 这样即便 {c:'init'} 仍因某种原因丢失,后续任一消息也能把 responder 推进到 secure。
+      setSecureStatus('secure');
       const obj = JSON.parse(plain) as { c?: string; t?: string; f?: FileOfferMeta; id?: string };
       if (obj.c === 'init') {
         // 发起方的会话建立控制消息：入站棘轮已就绪，标记安全并提示接收方核对安全码
-        setSecureStatus('secure');
         log(t.chat.p2p.e2eEstablished);
         return;
       }
@@ -806,6 +841,9 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       dev('收到无法解密的消息（已丢弃）');
     }
   }, [addMessage, handleFileCancel, handleFileOffer, persistMessage, log, dev, isContentUnlocked]);
+
+  // 让 handleHello（前段定义）能重放缓冲密文。
+  useEffect(() => { handleCipherRef.current = (p) => { void handleCipher(p); }; }, [handleCipher]);
 
   // ——————————————————— 配对码（自动抗 MITM）握手 ———————————————————
   // 校验对端 reveal：commit 绑定 + 常量时间比对。一致=已密码学确认无中间人→放行内容；
