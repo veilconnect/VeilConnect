@@ -67,6 +67,16 @@ class SignalingServer {
         // 以免信令服务器变成「谁在何时与谁连接」的旁路元数据库。运维排障可设 SIGNAL_VERBOSE=1 开启。
         this.verbose = process.env.SIGNAL_VERBOSE === '1';
 
+        // —— 异步文件 blob 暂存（网盘式:链接即密钥;服务器只存【密文】,无密钥解不开)——
+        // 默认开启;BLOB_STORE=off 关闭(回到"服务器零存储")。BLOB_DIR 默认 server/blobs;
+        // 单文件上限 BLOB_MAX_MB(默认50);TTL BLOB_TTL_H(默认24h,过期自动删)。
+        this.blobEnabled = process.env.BLOB_STORE !== 'off';
+        this.blobDir = process.env.BLOB_DIR || path.join(__dirname, 'blobs');
+        this.blobMaxBytes = (parseInt(process.env.BLOB_MAX_MB || '50', 10) || 50) * 1024 * 1024;
+        this.blobTtlMs = (parseInt(process.env.BLOB_TTL_H || '24', 10) || 24) * 3600 * 1000;
+        this.blobs = new Map(); // id -> { size, expiresAt }
+        if (this.blobEnabled) this.initBlobStore();
+
         this.setupMiddleware();
         this.setupRoutes();
         this.setupWebSocket();
@@ -81,6 +91,29 @@ class SignalingServer {
     /** 仅在 SIGNAL_VERBOSE=1 时输出含元数据的日志（IP / clientId / roomId / 消息类型）。 */
     vlog(...args) {
         if (this.verbose) console.log(...args);
+    }
+
+    /** 初始化 blob 存储:建目录 + 扫描已有文件重建过期表(以 mtime+TTL 估算)。 */
+    initBlobStore() {
+        try {
+            fs.mkdirSync(this.blobDir, { recursive: true });
+            for (const f of fs.readdirSync(this.blobDir)) {
+                if (!/^[a-f0-9]{32}$/.test(f)) continue;
+                const st = fs.statSync(path.join(this.blobDir, f));
+                this.blobs.set(f, { size: st.size, expiresAt: st.mtimeMs + this.blobTtlMs });
+            }
+        } catch (e) { console.error('blob store init failed:', e.message); }
+    }
+
+    /** 删除已过期的 blob(由心跳清扫器周期调用)。 */
+    sweepBlobs(now = Date.now()) {
+        if (!this.blobEnabled) return;
+        for (const [id, meta] of this.blobs) {
+            if (now > meta.expiresAt) {
+                try { fs.unlinkSync(path.join(this.blobDir, id)); } catch { /* 已不在 */ }
+                this.blobs.delete(id);
+            }
+        }
     }
 
     /**
@@ -275,9 +308,47 @@ class SignalingServer {
             res.json({ iceServers: [{ urls, username, credential }], ttl });
         });
 
-        // SPA 回退：非 API/健康/凭据路由一律返回 index.html（支持前端路由 / 直接打开分享链接）
+        // —— 异步文件 blob：上传密文(流式落盘,大小上限,每 IP 限流) / 下载密文 ——
+        // 服务器只搬运密文,无密钥解不开;密钥在分享链接的 #片段里,绝不到服务器。
+        if (this.blobEnabled) {
+            this.app.post('/blob', (req, res) => {
+                const ip = this.clientIp(req);
+                if (!this.checkRateLimit(ip)) return res.status(429).json({ error: 'Too many requests' });
+                const id = require('crypto').randomBytes(16).toString('hex');
+                const tmp = path.join(this.blobDir, id + '.tmp');
+                const out = fs.createWriteStream(tmp);
+                let bytes = 0, aborted = false;
+                const fail = (code, msg) => { aborted = true; out.destroy(); try { fs.unlinkSync(tmp); } catch {} if (!res.headersSent) res.status(code).json({ error: msg }); try { req.destroy(); } catch {} };
+                req.on('data', (chunk) => { if (aborted) return; bytes += chunk.length; if (bytes > this.blobMaxBytes) return fail(413, 'File too large'); out.write(chunk); });
+                req.on('end', () => {
+                    if (aborted) return;
+                    out.end(() => {
+                        try { fs.renameSync(tmp, path.join(this.blobDir, id)); }
+                        catch { return res.status(500).json({ error: 'store failed' }); }
+                        const expiresAt = Date.now() + this.blobTtlMs;
+                        this.blobs.set(id, { size: bytes, expiresAt });
+                        this.vlog(`📦 blob 上传 ${id} (${bytes}B) from ${ip}`);
+                        res.json({ id, size: bytes, expiresAt });
+                    });
+                });
+                req.on('error', () => fail(400, 'upload error'));
+            });
+            this.app.get('/blob/:id', (req, res) => {
+                const id = req.params.id;
+                if (!/^[a-f0-9]{32}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+                const meta = this.blobs.get(id);
+                const fp = path.join(this.blobDir, id);
+                if (!meta || Date.now() > meta.expiresAt || !fs.existsSync(fp)) return res.status(404).json({ error: 'not found or expired' });
+                res.setHeader('Content-Type', 'application/octet-stream');
+                res.setHeader('Content-Length', meta.size);
+                res.setHeader('Cache-Control', 'no-store');
+                fs.createReadStream(fp).pipe(res);
+            });
+        }
+
+        // SPA 回退：非 API/健康/凭据/blob 路由一律返回 index.html（支持前端路由 / 直接打开分享链接）
         this.app.get('*', (req, res, next) => {
-            if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/turn-credentials') {
+            if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/turn-credentials' || req.path.startsWith('/blob')) {
                 return next();
             }
             res.sendFile(path.join(__dirname, 'public', 'index.html'), (err) => {
@@ -554,6 +625,7 @@ class SignalingServer {
         this.heartbeatTimer = setInterval(() => {
             const now = Date.now();
             this.sweepRateLimitBuckets(now);
+            this.sweepBlobs(now);
             for (const [ws, client] of this.clients) {
                 if (now - client.lastSeen > HEARTBEAT_TIMEOUT_MS) {
                     this.vlog(`💤 关闭闲置连接: ${client.id}`);

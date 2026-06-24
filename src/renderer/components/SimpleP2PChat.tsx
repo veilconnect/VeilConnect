@@ -17,6 +17,7 @@ import {
   sha256Hex
 } from '../../web/fileTransfer/fileTransfer';
 import { deriveSafetyCode } from '../../web/security/safetyCode';
+import { shareFile } from '../../web/blob/blobTransfer';
 import {
   generatePairingCode,
   generateNonce,
@@ -163,6 +164,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const [showPairEnter, setShowPairEnter] = useState(false); // guest 输入配对码弹窗
   const [pairEnterInput, setPairEnterInput] = useState('');
   const [joinPairInput, setJoinPairInput] = useState('');     // guest 加入弹窗里可选预填配对码
+  // 异步文件(网盘式):上传加密 blob 得分享链接(无需对方在线)
+  const [blobLink, setBlobLink] = useState('');
+  const [blobBusy, setBlobBusy] = useState(false);
+  const blobInputRef = useRef<HTMLInputElement>(null);
 
   // UI：瞬时提示（toast）、关于面板展开、本机昵称（可改）
   const [toasts, setToasts] = useState<{ id: number; text: string; kind: 'info' | 'warn' | 'error' }[]>([]);
@@ -1388,6 +1393,26 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     void sendFile(file);
   }, [sendFile]);
 
+  // 异步文件(网盘式):本地加密 → 上传密文 → 得分享链接(密钥在链接 #片段,服务器解不开)。
+  // 无需对方在线;可选提取密码。链接经可信渠道发给对方,对方打开即下载解密。
+  const handleBlobShareChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (event.currentTarget) event.currentTarget.value = '';
+    if (!file) return;
+    setBlobBusy(true); setBlobLink('');
+    try {
+      const pw = (window.prompt(t.chat.p2p.blobPasswordPrompt, '') || '').trim();
+      const { link } = await shareFile(file, { origin: location.origin, password: pw || undefined });
+      setBlobLink(link);
+      log(t.chat.p2p.blobReady);
+    } catch (err) {
+      log(t.chat.p2p.blobFailed, 'ERROR');
+      dev(`blob share failed: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setBlobBusy(false);
+    }
+  }, [log, dev]);
+
   const cancelFileTransfer = useCallback((id: string) => {
     cancelledFilesRef.current.add(id);
     receivingFilesRef.current.delete(id);
@@ -1886,7 +1911,33 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
             ❌ {t.chat.disconnect}
           </button>
         )}
+        {/* 异步文件(网盘式):随时可用,无需对方在线 */}
+        <button
+          style={{ ...styles.btnSecondary, opacity: blobBusy ? 0.6 : 1 }}
+          onClick={() => blobInputRef.current?.click()}
+          disabled={blobBusy}
+          title={t.chat.p2p.blobShareTitle}
+        >
+          {blobBusy ? t.chat.p2p.blobUploading : t.chat.p2p.blobShareBtn}
+        </button>
+        <input ref={blobInputRef} type="file" style={{ display: 'none' }} onChange={handleBlobShareChange} />
       </div>
+
+      {/* 异步文件分享链接结果卡片 */}
+      {blobLink && (
+        <div style={{ padding: '12px', background: '#eef9f1', borderTop: '1px solid #cde9d6' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t.chat.p2p.blobLinkHeading}</div>
+          <input
+            type="text" value={blobLink} readOnly onFocus={(e) => e.currentTarget.select()}
+            style={{ width: '100%', margin: '4px 0', padding: '8px 10px', border: '1px solid #cde9d6', borderRadius: 6, fontFamily: 'monospace', fontSize: 12, boxSizing: 'border-box' }}
+          />
+          <p style={{ fontSize: 12, color: '#a05a00', margin: '6px 0' }}>{t.chat.p2p.blobLinkHint}</p>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button style={styles.btn} onClick={() => copyToClipboard(blobLink)}>{t.chat.p2p.copyLink}</button>
+            <button style={styles.btnSecondary} onClick={() => setBlobLink('')}>{t.chat.p2p.collapse}</button>
+          </div>
+        </div>
+      )}
 
       {/* 房间分享（host）：内联卡片，全部在同一页面内完成；连接建立后(connected)自动消失，无弹窗。 */}
       {(roomLink || sharedRoomCode) && showRoomDialog && connectionStatus !== 'connected' && (

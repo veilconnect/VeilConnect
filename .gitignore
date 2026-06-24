@@ -29,3 +29,6 @@ web-host11.mjs
 
 # 本地 TLS 测试证书（勿入库）
 .certs/
+
+# blob 暂存(勿入库)
+server/blobs/

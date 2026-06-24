@@ -9,8 +9,14 @@ import { createRoot } from 'react-dom/client';
 import VeilConnectApp from '../renderer/VeilConnectApp';
 import '../renderer/VeilConnectApp.css';
 import { installElectronAPI, isKeyStoreInitialized, unlock, resetKeyStore } from './bridge/electronAPI';
+import DownloadView from './blob/DownloadView';
+import { parseShareHash } from './blob/blobTransfer';
 
-installElectronAPI();
+// 异步文件下载链接(#dl=..&k=..):独立下载页,无需身份/口令/Worker,优先于一切。
+const isDownloadLink = typeof location !== 'undefined' && !!parseShareHash(location.hash);
+
+// 非下载页才装配加密桥接(避免下载页无谓启动 Worker)。
+if (!isDownloadLink) installElectronAPI();
 
 const MIN_PASSPHRASE_LEN = 12; // 对齐加密导出口令下限（IdentityManager.MIN_EXPORT_PASSWORD_LEN）
 
@@ -184,7 +190,7 @@ function mount() {
     console.error('找不到 #root 元素');
     return;
   }
-  createRoot(rootElement).render(<UnlockGate />);
+  createRoot(rootElement).render(isDownloadLink ? <DownloadView /> : <UnlockGate />);
 }
 
 if (document.readyState === 'loading') {

@@ -253,6 +253,15 @@ export interface Translations {
       pairMissingCode: string;
       pairTimedOut: string;
       pairJoinOptional: string;
+      // —— 异步文件(网盘式)——
+      blobShareBtn: string;
+      blobShareTitle: string;
+      blobUploading: string;
+      blobPasswordPrompt: string;
+      blobReady: string;
+      blobFailed: string;
+      blobLinkHeading: string;
+      blobLinkHint: string;
       // —— 文件 / 图片传输 ——
       file: {
         attachTitle: string;
@@ -520,6 +529,14 @@ export const translations: Record<string, Translations> = {
         pairMissingCode: '请输入完整配对码（系统生成的那串）再继续',
         pairTimedOut: '配对码验证超时，已断开（请确认双方用的是同一个码）',
         pairJoinOptional: '配对码（可选；对方启用时填写，将自动验证免去手动核对安全码）',
+        blobShareBtn: '📤 发文件得链接',
+        blobShareTitle: '加密上传文件,得一条分享链接(对方无需在线,凭链接即可下载)',
+        blobUploading: '加密上传中…',
+        blobPasswordPrompt: '可选:设置提取密码(留空=仅凭链接即可下载)。设了密码则对方需链接+密码。',
+        blobReady: '✅ 分享链接已生成(文件已加密上传)',
+        blobFailed: '文件上传失败',
+        blobLinkHeading: '📦 文件分享链接(含解密密钥,经可信渠道发给对方)',
+        blobLinkHint: '⚠️ 链接含解密密钥;对方打开即可下载解密,无需在线。默认 24 小时后过期。',
         file: {
           attachTitle: '发送文件或图片',
           busy: '已有文件正在发送，请等当前文件传完再发下一个',
@@ -785,6 +802,14 @@ export const translations: Record<string, Translations> = {
         pairMissingCode: 'Enter the full pairing code (the system-generated one) first',
         pairTimedOut: 'Pairing verification timed out — disconnected (check both sides use the same code)',
         pairJoinOptional: 'Pairing code (optional; fill in if your peer enabled it — auto-verifies, no manual safety-code check)',
+        blobShareBtn: '📤 Share a file (link)',
+        blobShareTitle: 'Encrypt & upload a file, get a share link (recipient need not be online — they download via the link)',
+        blobUploading: 'Encrypting & uploading…',
+        blobPasswordPrompt: 'Optional: set a download password (leave empty = link alone is enough). If set, the recipient needs link + password.',
+        blobReady: '✅ Share link created (file encrypted & uploaded)',
+        blobFailed: 'File upload failed',
+        blobLinkHeading: '📦 File share link (contains the decryption key — send via a trusted channel)',
+        blobLinkHint: '⚠️ The link contains the decryption key; the recipient can download & decrypt without being online. Expires in 24h by default.',
         file: {
           attachTitle: 'Send a file or photo',
           busy: 'A file is already being sent — wait for it to finish before sending another',
@@ -1050,6 +1075,14 @@ export const translations: Record<string, Translations> = {
         pairMissingCode: '完全なペアリングコード（システム生成のもの）を入力してください',
         pairTimedOut: 'ペアリング検証がタイムアウトしたため切断しました（双方が同じコードか確認してください）',
         pairJoinOptional: 'ペアリングコード（任意。相手が有効化した場合に入力。安全コードの手動照合が不要になります）',
+        blobShareBtn: '📤 ファイルを共有(リンク)',
+        blobShareTitle: 'ファイルを暗号化してアップロードし共有リンクを取得(相手がオンラインでなくてもリンクでDL可)',
+        blobUploading: '暗号化してアップロード中…',
+        blobPasswordPrompt: '任意:ダウンロードパスワードを設定(空=リンクのみでDL可)。設定すると相手はリンク+パスワードが必要。',
+        blobReady: '✅ 共有リンクを生成(ファイルは暗号化してアップロード済み)',
+        blobFailed: 'ファイルのアップロードに失敗',
+        blobLinkHeading: '📦 ファイル共有リンク(復号鍵を含む。信頼できる経路で相手へ)',
+        blobLinkHint: '⚠️ リンクに復号鍵が含まれます。相手はオンラインでなくてもDL・復号可。既定で24時間後に失効。',
         file: {
           attachTitle: 'ファイルまたは写真を送信',
           busy: '送信中のファイルがあります。完了してから次を送ってください',
@@ -1315,6 +1348,14 @@ export const translations: Record<string, Translations> = {
         pairMissingCode: 'Introduce primero el código de emparejamiento completo (el generado por el sistema)',
         pairTimedOut: 'La verificación del emparejamiento expiró: desconectado (comprueba que ambos usáis el mismo código)',
         pairJoinOptional: 'Código de emparejamiento (opcional; rellénalo si tu par lo activó — verifica automáticamente, sin cotejo manual)',
+        blobShareBtn: '📤 Compartir archivo (enlace)',
+        blobShareTitle: 'Cifra y sube un archivo, obtén un enlace (el destinatario no necesita estar en línea; descarga por el enlace)',
+        blobUploading: 'Cifrando y subiendo…',
+        blobPasswordPrompt: 'Opcional: define una contraseña de descarga (vacío = basta el enlace). Si la pones, el destinatario necesita enlace + contraseña.',
+        blobReady: '✅ Enlace de descarga creado (archivo cifrado y subido)',
+        blobFailed: 'Error al subir el archivo',
+        blobLinkHeading: '📦 Enlace del archivo (contiene la clave de descifrado — envíalo por un canal de confianza)',
+        blobLinkHint: '⚠️ El enlace contiene la clave de descifrado; el destinatario puede descargar y descifrar sin estar en línea. Caduca en 24 h por defecto.',
         file: {
           attachTitle: 'Enviar un archivo o foto',
           busy: 'Ya se está enviando un archivo; espera a que termine antes de enviar otro',
