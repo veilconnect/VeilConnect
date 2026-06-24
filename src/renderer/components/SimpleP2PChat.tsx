@@ -18,6 +18,10 @@ import {
 } from '../../web/fileTransfer/fileTransfer';
 import { deriveSafetyCode } from '../../web/security/safetyCode';
 import { shareFile } from '../../web/blob/blobTransfer';
+
+// 异步文件(网盘式)总开关:自部署默认开;托管版(无 /blob 后端)构建期注入 __VC_BLOB_ENABLED__=false 隐藏入口。
+declare const __VC_BLOB_ENABLED__: boolean | undefined;
+const BLOB_ENABLED = typeof __VC_BLOB_ENABLED__ === 'undefined' ? true : !!__VC_BLOB_ENABLED__;
 import {
   generatePairingCode,
   generateNonce,
@@ -1911,20 +1915,22 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
             ❌ {t.chat.disconnect}
           </button>
         )}
-        {/* 异步文件(网盘式):随时可用,无需对方在线 */}
-        <button
-          style={{ ...styles.btnSecondary, opacity: blobBusy ? 0.6 : 1 }}
-          onClick={() => blobInputRef.current?.click()}
-          disabled={blobBusy}
-          title={t.chat.p2p.blobShareTitle}
-        >
-          {blobBusy ? t.chat.p2p.blobUploading : t.chat.p2p.blobShareBtn}
-        </button>
-        <input ref={blobInputRef} type="file" style={{ display: 'none' }} onChange={handleBlobShareChange} />
+        {/* 异步文件(网盘式):随时可用,无需对方在线。托管版无 /blob 后端时隐藏入口。 */}
+        {BLOB_ENABLED && (<>
+          <button
+            style={{ ...styles.btnSecondary, opacity: blobBusy ? 0.6 : 1 }}
+            onClick={() => blobInputRef.current?.click()}
+            disabled={blobBusy}
+            title={t.chat.p2p.blobShareTitle}
+          >
+            {blobBusy ? t.chat.p2p.blobUploading : t.chat.p2p.blobShareBtn}
+          </button>
+          <input ref={blobInputRef} type="file" style={{ display: 'none' }} onChange={handleBlobShareChange} />
+        </>)}
       </div>
 
       {/* 异步文件分享链接结果卡片 */}
-      {blobLink && (
+      {BLOB_ENABLED && blobLink && (
         <div style={{ padding: '12px', background: '#eef9f1', borderTop: '1px solid #cde9d6' }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t.chat.p2p.blobLinkHeading}</div>
           <input

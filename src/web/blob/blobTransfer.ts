@@ -19,6 +19,14 @@
  * upload/download 用 fetch(浏览器)。
  */
 
+// blob 端点基址:自部署默认同源('');托管版构建期注入 __VC_BLOB_BASE__ 指向独立 Worker(R2)。
+declare const __VC_BLOB_BASE__: string | undefined;
+function blobBase(explicit?: string): string {
+  if (explicit) return explicit;
+  try { if (typeof __VC_BLOB_BASE__ === 'string' && __VC_BLOB_BASE__) return __VC_BLOB_BASE__; } catch { /* 未注入 */ }
+  return '';
+}
+
 const MAGIC = new Uint8Array([0x56, 0x43, 0x42, 0x31]); // 'VCB1'
 const IV_LEN = 12;
 const RAW_KEY_BYTES = 32;
@@ -127,14 +135,14 @@ export function parseShareHash(hash: string): { id: string; rawKey: Uint8Array; 
 
 // —— 浏览器侧:上传 / 下载 ——
 /** 上传密文容器,返回 { id, expiresAt }。baseUrl 默认同源。 */
-export async function uploadBlob(container: Uint8Array, baseUrl = ''): Promise<{ id: string; size: number; expiresAt: number }> {
-  const r = await fetch(`${baseUrl}/blob`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: container as unknown as BodyInit });
+export async function uploadBlob(container: Uint8Array, baseUrl?: string): Promise<{ id: string; size: number; expiresAt: number }> {
+  const r = await fetch(`${blobBase(baseUrl)}/blob`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: container as unknown as BodyInit });
   if (!r.ok) throw new Error(`upload failed: ${r.status}`);
   return r.json();
 }
 /** 下载密文容器。 */
-export async function downloadBlob(id: string, baseUrl = ''): Promise<Uint8Array> {
-  const r = await fetch(`${baseUrl}/blob/${id}`);
+export async function downloadBlob(id: string, baseUrl?: string): Promise<Uint8Array> {
+  const r = await fetch(`${blobBase(baseUrl)}/blob/${id}`);
   if (!r.ok) throw new Error(`download failed: ${r.status}`);
   return new Uint8Array(await r.arrayBuffer());
 }

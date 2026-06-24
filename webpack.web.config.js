@@ -84,7 +84,12 @@ module.exports = (env, argv) => {
       // VC_TURN_ENDPOINT 指向独立的信令 Worker；自部署版不设 → 留空 → 运行时回退同源（同一服务器托管信令）。
       new webpack.DefinePlugin({
         __VC_SIGNALING_URL__: JSON.stringify(process.env.VC_SIGNALING_URL || ''),
-        __VC_TURN_ENDPOINT__: JSON.stringify(process.env.VC_TURN_ENDPOINT || '')
+        __VC_TURN_ENDPOINT__: JSON.stringify(process.env.VC_TURN_ENDPOINT || ''),
+        // 异步文件(网盘式)开关 + blob 端点基址。自部署(Node 同源含 /blob)默认开、同源;
+        // 托管版(Cloudflare Pages 静态,无 /blob 后端)设 VC_BLOB_ENABLED=0 隐藏入口,
+        // 待 R2 就绪后设 VC_BLOB_BASE=https://signal.veilconnect.org 指向 Worker 即可启用。
+        __VC_BLOB_ENABLED__: JSON.stringify(process.env.VC_BLOB_ENABLED !== '0'),
+        __VC_BLOB_BASE__: JSON.stringify(process.env.VC_BLOB_BASE || '')
       }),
       new webpack.ProvidePlugin({
         Buffer: ['buffer', 'Buffer'],
