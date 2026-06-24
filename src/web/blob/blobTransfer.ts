@@ -197,8 +197,16 @@ export function parseShareHash(hash: string): { id: string; rawKey: Uint8Array; 
   } catch { return null; }
 }
 
+/**
+ * 托管版(Cloudflare)单次上传上限:Cloudflare Workers 请求体上限 100MB,故卡在 95MB 给余量。
+ * 自部署(同源 Node)不受此限(由 Node 服务器自身 BLOB_MAX_MB 控制),故仅在指向独立 Worker 时生效。
+ */
+export const HOSTED_BLOB_MAX_BYTES = 95 * 1024 * 1024;
+export class BlobTooLargeError extends Error { constructor() { super('blob-too-large'); this.name = 'BlobTooLargeError'; } }
+
 /** 一步:流式加密 + 上传 File → 返回分享链接。 */
 export async function shareFile(file: File, opts: { origin: string; baseUrl?: string; password?: string }): Promise<{ link: string; id: string; expiresAt: number }> {
+  if (blobBase(opts.baseUrl) && file.size > HOSTED_BLOB_MAX_BYTES) throw new BlobTooLargeError();
   const raw = generateRawKey();
   const key = await deriveContentKey(raw, opts.password);
   const { id, expiresAt } = await uploadBlobStream(file, key, opts.baseUrl || '');

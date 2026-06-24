@@ -38,8 +38,9 @@ new_sqlite_classes = ["SignalingRoom"]
 # 允许的网页来源（逗号分隔）：托管站点的 apex + www + Pages 别名。本地联调用 `wrangler dev --var` 覆盖。
 ALLOWED_ORIGINS = "https://veilconnect.org,https://www.veilconnect.org,https://veilconnect.pages.dev"
 TURN_TTL = "86400"
-# 异步文件 blob：单文件上限(MB) + TTL(小时)。流式上传/下载,不再受 Worker 内存制约;
-# 上限按 R2 单次 put 的合理范围取(GB 级)。如需更大可改 multipart。
-BLOB_MAX_MB = "1024"
+# 异步文件 blob：单文件上限(MB) + TTL(小时)。流式上传/下载已不受 Worker 内存制约,但
+# 【Cloudflare Workers 请求体上限 100MB】是硬限——单次 POST 不能超 100MB,故卡 95MB 给余量。
+# 要支持 >100MB(GB 级)需改 R2 multipart(多次分片请求),见后续。
+BLOB_MAX_MB = "95"
 BLOB_TTL_H = "24"
 # TURN_KEY_ID / TURN_API_TOKEN 用 `wrangler secret put` 设置，勿写入此文件。

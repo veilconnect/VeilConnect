@@ -1416,6 +1416,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       setBlobLink(link);
       log(t.chat.p2p.blobReady);
     } catch (err) {
+      if (err instanceof Error && err.message === 'blob-too-large') { log(t.chat.p2p.blobTooLarge, 'WARN'); setBlobBusy(false); return; }
       log(t.chat.p2p.blobFailed, 'ERROR');
       dev(`blob share failed: ${err instanceof Error ? err.message : err}`);
     } finally {

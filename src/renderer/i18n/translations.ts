@@ -260,6 +260,7 @@ export interface Translations {
       blobPasswordPrompt: string;
       blobReady: string;
       blobFailed: string;
+      blobTooLarge: string;
       blobLinkHeading: string;
       blobLinkHint: string;
       // —— 文件 / 图片传输 ——
@@ -535,6 +536,7 @@ export const translations: Record<string, Translations> = {
         blobPasswordPrompt: '可选:设置提取密码(留空=仅凭链接即可下载)。设了密码则对方需链接+密码。',
         blobReady: '✅ 分享链接已生成(文件已加密上传)',
         blobFailed: '文件上传失败',
+        blobTooLarge: '文件过大:托管版单次上传上限约 95MB(受 Cloudflare 100MB 请求体限制)。更大文件需多分片上传(暂未支持)。',
         blobLinkHeading: '📦 文件分享链接(含解密密钥,经可信渠道发给对方)',
         blobLinkHint: '⚠️ 链接含解密密钥;对方打开即可下载解密,无需在线。默认 24 小时后过期。',
         file: {
@@ -808,6 +810,7 @@ export const translations: Record<string, Translations> = {
         blobPasswordPrompt: 'Optional: set a download password (leave empty = link alone is enough). If set, the recipient needs link + password.',
         blobReady: '✅ Share link created (file encrypted & uploaded)',
         blobFailed: 'File upload failed',
+        blobTooLarge: 'File too large: hosted single upload is capped at ~95MB (Cloudflare 100MB request-body limit). Larger files need multipart upload (not yet supported).',
         blobLinkHeading: '📦 File share link (contains the decryption key — send via a trusted channel)',
         blobLinkHint: '⚠️ The link contains the decryption key; the recipient can download & decrypt without being online. Expires in 24h by default.',
         file: {
@@ -1081,6 +1084,7 @@ export const translations: Record<string, Translations> = {
         blobPasswordPrompt: '任意:ダウンロードパスワードを設定(空=リンクのみでDL可)。設定すると相手はリンク+パスワードが必要。',
         blobReady: '✅ 共有リンクを生成(ファイルは暗号化してアップロード済み)',
         blobFailed: 'ファイルのアップロードに失敗',
+        blobTooLarge: 'ファイルが大きすぎます:ホスト版の単一アップロード上限は約95MB(Cloudflareの100MBリクエスト制限)。それ以上はマルチパート必須(未対応)。',
         blobLinkHeading: '📦 ファイル共有リンク(復号鍵を含む。信頼できる経路で相手へ)',
         blobLinkHint: '⚠️ リンクに復号鍵が含まれます。相手はオンラインでなくてもDL・復号可。既定で24時間後に失効。',
         file: {
@@ -1354,6 +1358,7 @@ export const translations: Record<string, Translations> = {
         blobPasswordPrompt: 'Opcional: define una contraseña de descarga (vacío = basta el enlace). Si la pones, el destinatario necesita enlace + contraseña.',
         blobReady: '✅ Enlace de descarga creado (archivo cifrado y subido)',
         blobFailed: 'Error al subir el archivo',
+        blobTooLarge: 'Archivo demasiado grande: la subida única en la versión alojada se limita a ~95MB (límite de 100MB de Cloudflare). Archivos mayores requieren multipart (aún no soportado).',
         blobLinkHeading: '📦 Enlace del archivo (contiene la clave de descifrado — envíalo por un canal de confianza)',
         blobLinkHint: '⚠️ El enlace contiene la clave de descifrado; el destinatario puede descargar y descifrar sin estar en línea. Caduca en 24 h por defecto.',
         file: {
