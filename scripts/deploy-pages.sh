@@ -13,10 +13,10 @@ SIGNAL="${VC_SIGNALING_URL:-wss://signal.veilconnect.org}"
 TURN="${VC_TURN_ENDPOINT:-https://signal.veilconnect.org/turn-credentials}"
 PROJECT="${PAGES_PROJECT:-veilconnect}"
 
-# 异步文件(网盘式)默认在托管版【关闭】:Cloudflare Pages 是静态站,无 /blob 后端(需 R2)。
-# 待 R2 就绪后:`VC_BLOB_ENABLED=1 VC_BLOB_BASE=https://signal.veilconnect.org bash scripts/deploy-pages.sh` 即可启用。
-BLOB_ENABLED="${VC_BLOB_ENABLED:-0}"
-BLOB_BASE="${VC_BLOB_BASE:-}"
+# 异步文件(网盘式):R2 已就绪(信令 Worker 提供 /blob,桶 veilconnect-blob),托管版【默认开启】,
+# blob 后端指向独立的信令 Worker(R2)。如需临时关闭:`VC_BLOB_ENABLED=0 bash scripts/deploy-pages.sh`。
+BLOB_ENABLED="${VC_BLOB_ENABLED:-1}"
+BLOB_BASE="${VC_BLOB_BASE:-https://signal.veilconnect.org}"
 
 echo "==> build SPA for Pages (signaling=$SIGNAL, turn=$TURN, blob=$BLOB_ENABLED)"
 VC_SIGNALING_URL="$SIGNAL" VC_TURN_ENDPOINT="$TURN" VC_BLOB_ENABLED="$BLOB_ENABLED" VC_BLOB_BASE="$BLOB_BASE" npm run build:web
