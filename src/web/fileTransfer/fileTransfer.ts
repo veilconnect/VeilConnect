@@ -11,8 +11,15 @@
  * 本模块不引用 window / Worker，只用 globalThis.crypto.subtle，故可在 Node 测试环境直接跑。
  */
 
-/** 每个分块的明文大小（64 KiB）。AES-GCM 会再加 16B 标签，base64 后约 +33%。 */
-export const DEFAULT_CHUNK_SIZE = 64 * 1024;
+/**
+ * 每个分块的明文大小（8 KiB）。AES-GCM 加 16B 标签、base64 +33%、再套 JSON 帧后，
+ * 单条 DataChannel 消息约 ~11 KB，稳在 WebRTC 跨端互操作建议的 16 KiB 上限内。
+ *
+ * 为何不是更大：经 TURN（尤其 turns/TCP）中继时，>16 KiB 的单条 SCTP 消息会在中继路径上
+ * 卡死（文本类小消息正常、大分块收不全）。直连(Chrome↔Chrome)虽可达 256 KiB，但默认
+ * relayOnly 隐藏 IP 时必经中继，故按中继的安全上限取值，保证两种路径都可靠。
+ */
+export const DEFAULT_CHUNK_SIZE = 8 * 1024;
 
 /** 单文件大小上限（100 MiB）。MVP 全量读入内存并算哈希，故设一个保守上限。 */
 export const MAX_FILE_SIZE = 100 * 1024 * 1024;

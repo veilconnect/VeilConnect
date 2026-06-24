@@ -97,6 +97,7 @@ interface ReceivingFile {
   meta: FileOfferMeta;
   key: CryptoKey;
   assembler: ChunkAssembler;
+  lastPct?: number; // 进度节流：上次已上报的整百分点
 }
 
 function displayNickname(nickname: string | undefined | null): string {
@@ -583,7 +584,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       const plain = await decryptChunk(rx.key, chunk.iv, chunk.data);
       const fresh = rx.assembler.add(chunk.seq, plain);
       if (!fresh) return;
-      updateFileTransfer(id, { progress: rx.assembler.progress });
+      const pct = Math.floor(rx.assembler.progress * 100); // 按整百分点节流上报
+      if (pct !== rx.lastPct) { rx.lastPct = pct; updateFileTransfer(id, { progress: rx.assembler.progress }); }
       if (!rx.assembler.isComplete()) return;
 
       const assembled = rx.assembler.assemble();
@@ -1361,6 +1363,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       });
 
       await sendEncryptedControl({ c: 'file_offer', f: meta }, dc);
+      let lastPct = -1; // 进度按整百分点节流，避免分块变小后 setState 风暴
       for (let seq = 0; seq < totalChunks; seq++) {
         if (cancelledFilesRef.current.has(id)) {
           await sendEncryptedControl({ c: 'file_cancel', id }, dc).catch(() => undefined);
@@ -1376,7 +1379,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           iv: encrypted.iv,
           data: encrypted.data
         }));
-        updateFileTransfer(id, { progress: (seq + 1) / totalChunks });
+        const pct = Math.floor(((seq + 1) / totalChunks) * 100);
+        if (pct !== lastPct) { lastPct = pct; updateFileTransfer(id, { progress: (seq + 1) / totalChunks }); }
         await waitForDataChannelBackpressure(dc);
       }
       await sendEncryptedControl({ c: 'file_complete', id }, dc).catch(() => undefined);
