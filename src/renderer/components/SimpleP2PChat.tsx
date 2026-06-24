@@ -212,9 +212,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   // startPairing / enterPairingMode 在文件后段定义，handleHello 在前段，用 ref 指针打破顺序依赖。
   const startPairingRef = useRef<((channel: RTCDataChannel) => Promise<void>) | null>(null);
   const enterPairingModeRef = useRef<(() => void) | null>(null);
-  // 早于 handleHello 完成(peerId 未设)到达的密文先缓冲,握手完成后重放——防 {c:'init'} 因竞态丢失。
+  // 早于 handleHello 完成(peerId 未设)到达的密文先缓冲,握手完成后顺序重放——防 {c:'init'} 因竞态丢失。
   const pendingCipherRef = useRef<any[]>([]);
-  const handleCipherRef = useRef<((payload: any) => void) | null>(null);
+  const handleCipherRef = useRef<((payload: any) => Promise<void>) | null>(null);
+  // handleHello 重入防护:已完成或处理中则忽略重复/恶意 hello(await 拉长了重入窗口,防 secure 被打回 pending)。
+  const helloInFlightRef = useRef<boolean>(false);
 
   // WebRTC ICE 服务器与中继策略。为「尽量安全、不被中国相关方截获元数据」：
   // - relayOnly 默认开启：只用 TURN 的 relay 候选，隐藏双方真实 IP，邀请码(SDP)里也不出现真实 IP；
@@ -311,6 +313,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     sasConfirmedRef.current = false;
     queuedRxRef.current = [];
     pendingCipherRef.current = [];
+    helloInFlightRef.current = false;
     peerBoxKeyRef.current = null;
     // 配对码会话状态（保留 host 已生成的 pairCode/pairRequired 设置直到真正断开，避免重连丢失）
     pairVerifiedRef.current = false;
@@ -672,8 +675,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
 
   // 收到对端身份包：强制验证身份绑定 + ratchet 密钥签名，任一失败即视为中间人攻击并断开
   const handleHello = useCallback(async (bundle: any, channel: RTCDataChannel) => {
-    // 健壮性:确保本机身份已载入再继续——否则(慢设备上 onopen 早于身份加载完成)self 为 null,
-    // 会跳过 safetyCode 计算/配对设置,导致即便已 secure 也永不弹安全码(SAS 卡死)。
+    // 重入防护:已完成握手(peerId 已设)或正在处理,则忽略重复/恶意 hello——
+    // 否则下面的 await 期间二次进入会把已 secure 的状态打回 pending。
+    if (peerIdRef.current || helloInFlightRef.current) { dev('忽略重复/并发 hello'); return; }
+    helloInFlightRef.current = true;
+    // 健壮性:确保本机身份已载入(慢设备上 onopen 可能早于身份加载完成)。
     let self = selfIdentityRef.current;
     if (!self) {
       try {
@@ -685,7 +691,14 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           };
           self = selfIdentityRef.current;
         }
-      } catch { /* 取不到则按原逻辑继续(后续条件判断会兜底) */ }
+      } catch { /* 下面 fail closed */ }
+    }
+    if (!self) {
+      // 身份仍取不到 → fail closed:无本机身份无法算安全码,会话不可信,拒绝握手。
+      helloInFlightRef.current = false;
+      log(t.chat.p2p.loadIdentityFailed, 'ERROR');
+      dev('本机身份缺失,拒绝握手'); disconnectRef.current?.();
+      return;
     }
     try {
       if (!bundle?.boxPublicKey || !bundle?.keyBindingSignature) {
@@ -729,14 +742,6 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         dev(`ratchet pending as responder, peer=${String(peer.userId).slice(0, 12)}…`);
       }
 
-      // 重放在 handleHello 完成前缓冲的早到密文(如竞态先到的 {c:'init'}),现在 peerId 已就绪可解密。
-      if (pendingCipherRef.current.length) {
-        const buffered = pendingCipherRef.current;
-        pendingCipherRef.current = [];
-        dev(`replaying ${buffered.length} buffered cipher(s)`);
-        for (const p of buffered) void handleCipherRef.current?.(p);
-      }
-
       // —— 配对码（自动抗 MITM）——
       // 始终记录双方「身份 + box + 棘轮 + nonce」：transcript 绑定它们，中间人必须冒充→两端观测不同→证明不匹配。
       // 即便对端 hello 的 pairing 标志被中间人剥离，后续收到 pair-commit/reveal 也能据此启动（降级防御）。
@@ -763,10 +768,21 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         if (pairCodeRef.current) await startPairingRef.current?.(channel);
         else setShowPairEnter(true); // 本端尚无配对码（guest）→ 提示输入
       }
+
+      // 重放握手完成前缓冲的早到密文(如竞态先到的 {c:'init'})。放在最后(含配对设置之后,
+      // 避免配对模式下短暂出现「secure 但 pairRequired 未置位」的 UI 抖动);**顺序 await**——
+      // ratchet 解密有状态,乱序会导致后到的消息先跑而解不开。
+      if (pendingCipherRef.current.length) {
+        const buffered = pendingCipherRef.current;
+        pendingCipherRef.current = [];
+        dev(`replaying ${buffered.length} buffered cipher(s)`);
+        for (const p of buffered) { try { await handleCipherRef.current?.(p); } catch { /* 单条失败不影响其余 */ } }
+      }
     } catch (err) {
       setSecureStatus('failed');
       peerBoxKeyRef.current = null;
       peerIdRef.current = null;
+      helloInFlightRef.current = false;   // 允许失败后重试
       log(t.chat.p2p.peerVerifyFailed, 'ERROR');
       dev(`identity verification failed: ${err instanceof Error ? err.message : err}`);
       disconnectRef.current?.();
@@ -797,8 +813,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     if (!peerId) {
       // handleHello 尚未完成(peerId 未设):缓冲早到密文,握手完成后由 handleHello 重放,
       // 避免发起方的 {c:'init'} 因竞态先到而被丢弃 → responder 永停 pending、永不弹安全码。
-      if (pendingCipherRef.current.length < 64) pendingCipherRef.current.push(payload);
-      dev('密文早于握手完成,已缓冲待重放');
+      if (pendingCipherRef.current.length < 64) { pendingCipherRef.current.push(payload); dev('密文早于握手完成,已缓冲待重放'); }
+      else dev('早到密文缓冲已满(>64),丢弃本条');
       return;
     }
     try {
@@ -842,8 +858,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     }
   }, [addMessage, handleFileCancel, handleFileOffer, persistMessage, log, dev, isContentUnlocked]);
 
-  // 让 handleHello（前段定义）能重放缓冲密文。
-  useEffect(() => { handleCipherRef.current = (p) => { void handleCipher(p); }; }, [handleCipher]);
+  // 让 handleHello（前段定义）能顺序 await 重放缓冲密文(handleCipher 本身是 async)。
+  useEffect(() => { handleCipherRef.current = handleCipher; }, [handleCipher]);
 
   // ——————————————————— 配对码（自动抗 MITM）握手 ———————————————————
   // 校验对端 reveal：commit 绑定 + 常量时间比对。一致=已密码学确认无中间人→放行内容；
