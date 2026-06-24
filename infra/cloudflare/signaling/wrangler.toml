@@ -23,6 +23,12 @@ bindings = [
   { name = "SIGNALING_ROOM", class_name = "SignalingRoom" }
 ]
 
+# 异步文件(网盘式)密文暂存：R2 桶 veilconnect-blob，Worker 内绑定名 BLOB。
+# 只存密文+大小+过期(customMetadata.expiresAt)；过期对象 GET 时惰性删除，另配生命周期规则兜底硬删。
+[[r2_buckets]]
+binding = "BLOB"
+bucket_name = "veilconnect-blob"
+
 # SQLite-backed DO（new_sqlite_classes）以兼容 Cloudflare 免费套餐（本 DO 不落存储，仅用内存中继）。
 [[migrations]]
 tag = "v1"
@@ -32,4 +38,7 @@ new_sqlite_classes = ["SignalingRoom"]
 # 允许的网页来源（逗号分隔）：托管站点的 apex + www + Pages 别名。本地联调用 `wrangler dev --var` 覆盖。
 ALLOWED_ORIGINS = "https://veilconnect.org,https://www.veilconnect.org,https://veilconnect.pages.dev"
 TURN_TTL = "86400"
+# 异步文件 blob：单文件上限(MB) + TTL(小时)，与 Node 自部署版默认一致。
+BLOB_MAX_MB = "50"
+BLOB_TTL_H = "24"
 # TURN_KEY_ID / TURN_API_TOKEN 用 `wrangler secret put` 设置，勿写入此文件。

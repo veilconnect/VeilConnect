@@ -4,10 +4,13 @@
  * 路由：
  *   GET  /health             → 健康检查
  *   GET  /turn-credentials   → 经 Cloudflare Realtime(Calls) TURN 现签短时效凭据（不暴露长期密钥）
+ *   POST /blob               → 异步文件(网盘式)上传【密文】到 R2，返回 {id,size,expiresAt}
+ *   GET  /blob/<id>          → 下载密文(32hex id；过期/不存在 404；惰性删除已过期对象)
  *   WS   /?room=<roomId>      → 升级为 WebSocket，按 roomId 路由到对应的 SignalingRoom Durable Object
  *
  * Origin 白名单（ALLOWED_ORIGINS，逗号分隔）在升级前校验，未通过 403。
  * 信令被视为不可信中继：只搬运 SDP/ICE，读不到端到端密文。
+ * blob：服务器只存【密文 + 大小/过期】，密钥在分享链接 #片段里，绝不到服务器——无密钥解不开。
  */
 import { SignalingRoom } from './room.js';
 export { SignalingRoom };
@@ -26,7 +29,7 @@ function corsHeaders(origin, env) {
   const ok = isOriginAllowed(origin, env);
   return {
     'Access-Control-Allow-Origin': ok ? origin : 'null',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Vary': 'Origin'
   };
@@ -56,6 +59,59 @@ async function turnCredentials(request, env) {
   }
 }
 
+// —— 异步文件 blob（R2 后端）——
+function genBlobId() {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+}
+function blobMaxBytes(env) {
+  return (parseInt(env.BLOB_MAX_MB || '50', 10) || 50) * 1024 * 1024;
+}
+function blobTtlMs(env) {
+  return (parseInt(env.BLOB_TTL_H || '24', 10) || 24) * 3600 * 1000;
+}
+
+/** POST /blob：把密文容器存入 R2，返回 {id,size,expiresAt}。要求来源在白名单（防跨站滥用）+ 大小上限。 */
+async function blobUpload(request, env) {
+  const origin = request.headers.get('Origin');
+  const cors = corsHeaders(origin, env);
+  if (!env.BLOB) return json({ error: 'blob storage not configured' }, 503, cors);
+  // 防跨站滥用：仅允许白名单来源上传（curl 等无来源请求一并拒绝；更强的洪泛防护建议在 WAF/Rate Limiting 配）。
+  if (!isOriginAllowed(origin, env)) return json({ error: 'Origin not allowed' }, 403, cors);
+  const max = blobMaxBytes(env);
+  const declared = parseInt(request.headers.get('Content-Length') || '0', 10);
+  if (declared && declared > max) return json({ error: 'File too large' }, 413, cors);
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength === 0) return json({ error: 'empty body' }, 400, cors);
+  if (buf.byteLength > max) return json({ error: 'File too large' }, 413, cors);
+  const id = genBlobId();
+  const expiresAt = Date.now() + blobTtlMs(env);
+  await env.BLOB.put(id, buf, {
+    httpMetadata: { contentType: 'application/octet-stream', cacheControl: 'no-store' },
+    customMetadata: { expiresAt: String(expiresAt) }
+  });
+  return json({ id, size: buf.byteLength, expiresAt }, 200, cors);
+}
+
+/** GET /blob/<id>：取回密文。32hex 校验；过期或不存在 404，过期对象惰性删除。 */
+async function blobDownload(id, request, env) {
+  const origin = request.headers.get('Origin');
+  const cors = corsHeaders(origin, env);
+  if (!env.BLOB) return json({ error: 'blob storage not configured' }, 503, cors);
+  if (!/^[a-f0-9]{32}$/.test(id)) return json({ error: 'bad id' }, 400, cors);
+  const obj = await env.BLOB.get(id);
+  if (!obj) return json({ error: 'not found or expired' }, 404, cors);
+  const expiresAt = parseInt(obj.customMetadata?.expiresAt || '0', 10);
+  if (expiresAt && Date.now() > expiresAt) {
+    try { await env.BLOB.delete(id); } catch { /* 已不在 */ }
+    return json({ error: 'not found or expired' }, 404, cors);
+  }
+  return new Response(obj.body, {
+    status: 200,
+    headers: { ...cors, 'Content-Type': 'application/octet-stream', 'Content-Length': String(obj.size), 'Cache-Control': 'no-store' }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -69,6 +125,12 @@ export default {
     }
     if (url.pathname === '/turn-credentials') {
       return turnCredentials(request, env);
+    }
+    if (url.pathname === '/blob' && request.method === 'POST') {
+      return blobUpload(request, env);
+    }
+    if (url.pathname.startsWith('/blob/') && request.method === 'GET') {
+      return blobDownload(url.pathname.slice('/blob/'.length), request, env);
     }
 
     // WebSocket 升级 → 路由到房间 DO。
