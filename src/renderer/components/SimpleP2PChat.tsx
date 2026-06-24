@@ -8,8 +8,10 @@ import {
   MAX_FILE_SIZE,
   chunkCount,
   chunkRange,
-  decryptChunk,
-  encryptChunk,
+  encryptChunkRaw,
+  decryptChunkRaw,
+  packChunkFrame,
+  unpackChunkFrame,
   formatBytes,
   generateFileKey,
   importFileKey,
@@ -578,10 +580,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     updateFileTransfer(id, { status: 'cancelled', error: t.chat.p2p.file.cancelled });
   }, [t.chat.p2p.file.cancelled, updateFileTransfer]);
 
+  // chunk: { seq: number; iv: Uint8Array; cipher: Uint8Array }（来自二进制帧解析）
   const processFileChunk = useCallback(async (id: string, chunk: any, rx: ReceivingFile) => {
     if (cancelledFilesRef.current.has(id)) return;
     try {
-      const plain = await decryptChunk(rx.key, chunk.iv, chunk.data);
+      const plain = await decryptChunkRaw(rx.key, chunk.iv, chunk.cipher);
       const fresh = rx.assembler.add(chunk.seq, plain);
       if (!fresh) return;
       const pct = Math.floor(rx.assembler.progress * 100); // 按整百分点节流上报
@@ -1027,6 +1030,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
 
   // 设置数据通道
   const setupDataChannel = useCallback((channel: RTCDataChannel) => {
+    channel.binaryType = 'arraybuffer'; // 文件分块走二进制帧（ArrayBuffer），免 base64 膨胀
     channel.onopen = () => {
       dev('数据通道已打开，开始安全握手');
       setConnectionStatus('connected');
@@ -1043,6 +1047,13 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     };
 
     channel.onmessage = (event) => {
+      // 二进制帧 = 文件分块（ArrayBuffer）：解析后走文件接收流程，绝不走 JSON 分支。
+      if (event.data instanceof ArrayBuffer) {
+        const frame = unpackChunkFrame(event.data);
+        if (frame) void handleFileChunk(frame);
+        else dev('收到无法解析的二进制帧，已忽略');
+        return;
+      }
       let data: any;
       try {
         data = JSON.parse(event.data);
@@ -1061,9 +1072,6 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           break;
         case 'cipher':
           void handleCipher(data.payload);
-          break;
-        case 'file_chunk':
-          void handleFileChunk(data);
           break;
         case 'pair-commit':
           void handlePairCommit(data, channel);
@@ -1371,14 +1379,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           return;
         }
         const { start, end } = chunkRange(seq, DEFAULT_CHUNK_SIZE, bytes.byteLength);
-        const encrypted = await encryptChunk(key, bytes.subarray(start, end));
-        dc.send(JSON.stringify({
-          type: 'file_chunk',
-          id,
-          seq,
-          iv: encrypted.iv,
-          data: encrypted.data
-        }));
+        const { iv, cipher } = await encryptChunkRaw(key, bytes.subarray(start, end));
+        dc.send(packChunkFrame(id, seq, iv, cipher)); // 二进制帧:免 base64,载荷近翻倍
         const pct = Math.floor(((seq + 1) / totalChunks) * 100);
         if (pct !== lastPct) { lastPct = pct; updateFileTransfer(id, { progress: (seq + 1) / totalChunks }); }
         await waitForDataChannelBackpressure(dc);

@@ -9,8 +9,10 @@ import {
   sha256Hex,
   generateFileKey,
   importFileKey,
-  encryptChunk,
-  decryptChunk,
+  encryptChunkRaw,
+  decryptChunkRaw,
+  packChunkFrame,
+  unpackChunkFrame,
   ChunkAssembler,
   DEFAULT_CHUNK_SIZE,
 } from '../src/web/fileTransfer/fileTransfer';
@@ -113,32 +115,63 @@ describe('sha256Hex', () => {
   });
 });
 
-describe('AES-GCM chunk encryption', () => {
+describe('AES-GCM chunk encryption (raw)', () => {
   it('round-trips a chunk and rejects tampering', async () => {
     const { key, raw } = await generateFileKey();
     const plain = new TextEncoder().encode('secret photo bytes');
-    const { iv, data } = await encryptChunk(key, plain);
+    const { iv, cipher } = await encryptChunkRaw(key, plain);
 
-    // base64 ciphertext must differ from plaintext base64
-    expect(data).not.toBe(bytesToBase64(plain));
+    // 密文字节必须与明文不同
+    expect(Array.from(cipher)).not.toEqual(Array.from(plain));
 
-    // importable on the receive side from the raw key
     const imported = await importFileKey(raw);
-    const decrypted = await decryptChunk(imported, iv, data);
+    const decrypted = await decryptChunkRaw(imported, iv, cipher);
     expect(new TextDecoder().decode(decrypted)).toBe('secret photo bytes');
 
-    // flipping a ciphertext byte must fail the GCM tag
-    const corrupt = base64ToBytes(data);
+    // 翻转一个密文字节必须使 GCM 标签校验失败
+    const corrupt = cipher.slice();
     corrupt[0] ^= 0xff;
-    await expect(decryptChunk(imported, iv, bytesToBase64(corrupt))).rejects.toBeTruthy();
+    await expect(decryptChunkRaw(imported, iv, corrupt)).rejects.toBeTruthy();
   });
 
   it('uses a fresh IV per call', async () => {
     const { key } = await generateFileKey();
     const plain = new Uint8Array([9, 9, 9]);
-    const a = await encryptChunk(key, plain);
-    const b = await encryptChunk(key, plain);
-    expect(a.iv).not.toBe(b.iv);
+    const a = await encryptChunkRaw(key, plain);
+    const b = await encryptChunkRaw(key, plain);
+    expect(Array.from(a.iv)).not.toEqual(Array.from(b.iv));
+  });
+});
+
+describe('binary chunk frame', () => {
+  it('packs and unpacks id/seq/iv/cipher losslessly', async () => {
+    const { key } = await generateFileKey();
+    const id = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'; // 32 hex（与 randomTransferId 同长）
+    const plain = new TextEncoder().encode('hello binary frame payload');
+    const { iv, cipher } = await encryptChunkRaw(key, plain);
+    const frame = packChunkFrame(id, 12345, iv, cipher);
+    expect(frame).toBeInstanceOf(ArrayBuffer);
+
+    const got = unpackChunkFrame(frame)!;
+    expect(got).not.toBeNull();
+    expect(got.id).toBe(id);
+    expect(got.seq).toBe(12345);
+    expect(Array.from(got.iv)).toEqual(Array.from(iv));
+    const dec = await decryptChunkRaw(key, got.iv, got.cipher);
+    expect(new TextDecoder().decode(dec)).toBe('hello binary frame payload');
+  });
+
+  it('rejects non-frame / truncated buffers', () => {
+    expect(unpackChunkFrame(new Uint8Array([0x00, 0x01, 0x02]).buffer)).toBeNull(); // 错误魔数
+    expect(unpackChunkFrame(new Uint8Array([0xf1]).buffer)).toBeNull();             // 过短
+  });
+
+  it('keeps a default-size chunk frame within the 16 KiB relay-safe limit', async () => {
+    const { key } = await generateFileKey();
+    const plain = new Uint8Array(DEFAULT_CHUNK_SIZE); // 满块
+    const { iv, cipher } = await encryptChunkRaw(key, plain);
+    const frame = packChunkFrame('a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', 0, iv, cipher);
+    expect(frame.byteLength).toBeLessThanOrEqual(16 * 1024);
   });
 });
 

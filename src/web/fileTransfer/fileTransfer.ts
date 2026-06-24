@@ -12,14 +12,18 @@
  */
 
 /**
- * 每个分块的明文大小（8 KiB）。AES-GCM 加 16B 标签、base64 +33%、再套 JSON 帧后，
- * 单条 DataChannel 消息约 ~11 KB，稳在 WebRTC 跨端互操作建议的 16 KiB 上限内。
+ * 每个分块的明文大小（15 KiB）。分块用【二进制帧】直接走 DataChannel（不再 base64），
+ * 加 16B GCM 标签 + ~50B 二进制头后，单条消息约 ~15.4 KB，稳在 WebRTC 跨端互操作建议的
+ * 16 KiB 上限内。
  *
- * 为何不是更大：经 TURN（尤其 turns/TCP）中继时，>16 KiB 的单条 SCTP 消息会在中继路径上
+ * 为何卡这条线：经 TURN（尤其 turns/TCP）中继时，>16 KiB 的单条 SCTP 消息会在中继路径上
  * 卡死（文本类小消息正常、大分块收不全）。直连(Chrome↔Chrome)虽可达 256 KiB，但默认
  * relayOnly 隐藏 IP 时必经中继，故按中继的安全上限取值，保证两种路径都可靠。
+ *
+ * 二进制帧 vs 早先的 base64 文本帧：免去 +33% 膨胀、每帧载荷近翻倍、消息条数减半，
+ * 中继下大文件吞吐显著提升（实测 ~150KB/s → 数倍）。
  */
-export const DEFAULT_CHUNK_SIZE = 8 * 1024;
+export const DEFAULT_CHUNK_SIZE = 15 * 1024;
 
 /** 单文件大小上限（100 MiB）。MVP 全量读入内存并算哈希，故设一个保守上限。 */
 export const MAX_FILE_SIZE = 100 * 1024 * 1024;
@@ -122,18 +126,54 @@ export async function importFileKey(rawB64: string): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
-/** 用一次性密钥加密单个分块，随机 IV，返回 base64 的 iv + 密文（含 GCM 标签）。 */
-export async function encryptChunk(key: CryptoKey, plain: Uint8Array): Promise<{ iv: string; data: string }> {
+// ---- 二进制分块（走 DataChannel 的 ArrayBuffer，免 base64 膨胀）----
+
+/** 加密单个分块，返回原始 IV 与密文字节（含 GCM 标签），用于二进制分帧。 */
+export async function encryptChunkRaw(key: CryptoKey, plain: Uint8Array): Promise<{ iv: Uint8Array; cipher: Uint8Array }> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain));
-  return { iv: bytesToBase64(iv), data: bytesToBase64(cipher) };
+  return { iv, cipher };
 }
 
-/** 解密单个分块；IV 或标签不符（被篡改/损坏）时 subtle.decrypt 抛错。 */
-export async function decryptChunk(key: CryptoKey, ivB64: string, dataB64: string): Promise<Uint8Array> {
-  const iv = base64ToBytes(ivB64);
-  const cipher = base64ToBytes(dataB64);
+/** 解密单个分块（原始字节版）；IV/标签不符即抛错。 */
+export async function decryptChunkRaw(key: CryptoKey, iv: Uint8Array, cipher: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher));
+}
+
+/**
+ * 二进制分块帧（避免 JSON+base64 的 +33% 膨胀，单帧 ≤16 KiB 适配 TURN 中继）。
+ * 布局：[0]=魔数 0xF1 | [1]=idLen | [2..]=id(utf8) | [+4]=seq(uint32 BE) | [+12]=iv | [..]=cipher
+ */
+export const CHUNK_FRAME_MAGIC = 0xf1;
+
+export function packChunkFrame(id: string, seq: number, iv: Uint8Array, cipher: Uint8Array): ArrayBuffer {
+  const idBytes = new TextEncoder().encode(id);
+  if (idBytes.length > 255) throw new Error('transfer id too long');
+  if (iv.length !== IV_BYTES) throw new Error('bad iv length');
+  const buf = new Uint8Array(2 + idBytes.length + 4 + IV_BYTES + cipher.length);
+  let o = 0;
+  buf[o++] = CHUNK_FRAME_MAGIC;
+  buf[o++] = idBytes.length;
+  buf.set(idBytes, o); o += idBytes.length;
+  new DataView(buf.buffer).setUint32(o, seq >>> 0, false); o += 4;
+  buf.set(iv, o); o += IV_BYTES;
+  buf.set(cipher, o);
+  return buf.buffer;
+}
+
+export function unpackChunkFrame(data: ArrayBuffer): { id: string; seq: number; iv: Uint8Array; cipher: Uint8Array } | null {
+  try {
+    const buf = new Uint8Array(data);
+    if (buf.length < 2 + 4 + IV_BYTES || buf[0] !== CHUNK_FRAME_MAGIC) return null;
+    const idLen = buf[1];
+    let o = 2;
+    if (buf.length < 2 + idLen + 4 + IV_BYTES) return null;
+    const id = new TextDecoder().decode(buf.subarray(o, o + idLen)); o += idLen;
+    const seq = new DataView(buf.buffer, buf.byteOffset).getUint32(o, false); o += 4;
+    const iv = buf.subarray(o, o + IV_BYTES); o += IV_BYTES;
+    const cipher = buf.subarray(o);
+    return { id, seq, iv, cipher };
+  } catch { return null; }
 }
 
 /**
