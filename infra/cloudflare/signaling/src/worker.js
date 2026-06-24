@@ -30,7 +30,7 @@ function corsHeaders(origin, env) {
   return {
     'Access-Control-Allow-Origin': ok ? origin : 'null',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-VC-Declared-Bytes',
     'Vary': 'Origin'
   };
 }
