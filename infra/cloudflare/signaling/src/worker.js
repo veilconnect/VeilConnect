@@ -71,26 +71,39 @@ function blobTtlMs(env) {
   return (parseInt(env.BLOB_TTL_H || '24', 10) || 24) * 3600 * 1000;
 }
 
-/** POST /blob：把密文容器存入 R2，返回 {id,size,expiresAt}。要求来源在白名单（防跨站滥用）+ 大小上限。 */
+/**
+ * POST /blob：把密文容器【流式】存入 R2，返回 {id,expiresAt}。要求来源在白名单（防跨站滥用）。
+ * 大文件不再 arrayBuffer 整体读入(会 OOM 撑爆 Worker 128MB),而是把 request.body 直接流给 R2。
+ * 大小上限按客户端声明的明文大小(X-VC-Declared-Bytes)或 Content-Length 预判；落库后再以 R2 实际
+ * 大小复核(超限则删除并 413)。
+ */
 async function blobUpload(request, env) {
   const origin = request.headers.get('Origin');
   const cors = corsHeaders(origin, env);
   if (!env.BLOB) return json({ error: 'blob storage not configured' }, 503, cors);
   // 防跨站滥用：仅允许白名单来源上传（curl 等无来源请求一并拒绝；更强的洪泛防护建议在 WAF/Rate Limiting 配）。
   if (!isOriginAllowed(origin, env)) return json({ error: 'Origin not allowed' }, 403, cors);
+  if (!request.body) return json({ error: 'empty body' }, 400, cors);
   const max = blobMaxBytes(env);
-  const declared = parseInt(request.headers.get('Content-Length') || '0', 10);
+  const declared = parseInt(request.headers.get('X-VC-Declared-Bytes') || request.headers.get('Content-Length') || '0', 10);
   if (declared && declared > max) return json({ error: 'File too large' }, 413, cors);
-  const buf = await request.arrayBuffer();
-  if (buf.byteLength === 0) return json({ error: 'empty body' }, 400, cors);
-  if (buf.byteLength > max) return json({ error: 'File too large' }, 413, cors);
   const id = genBlobId();
   const expiresAt = Date.now() + blobTtlMs(env);
-  await env.BLOB.put(id, buf, {
-    httpMetadata: { contentType: 'application/octet-stream', cacheControl: 'no-store' },
-    customMetadata: { expiresAt: String(expiresAt) }
-  });
-  return json({ id, size: buf.byteLength, expiresAt }, 200, cors);
+  let obj;
+  try {
+    obj = await env.BLOB.put(id, request.body, {
+      httpMetadata: { contentType: 'application/octet-stream', cacheControl: 'no-store' },
+      customMetadata: { expiresAt: String(expiresAt) }
+    });
+  } catch (e) {
+    return json({ error: 'store failed: ' + String(e && e.message || e) }, 502, cors);
+  }
+  // 落库后按 R2 实际大小复核(防客户端少报 declared 绕过上限)
+  if (obj && typeof obj.size === 'number' && (obj.size === 0 || obj.size > max)) {
+    try { await env.BLOB.delete(id); } catch { /* ignore */ }
+    return json({ error: obj.size === 0 ? 'empty body' : 'File too large' }, obj.size === 0 ? 400 : 413, cors);
+  }
+  return json({ id, size: obj && obj.size, expiresAt }, 200, cors);
 }
 
 /** GET /blob/<id>：取回密文。32hex 校验；过期或不存在 404，过期对象惰性删除。 */
