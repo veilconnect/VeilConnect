@@ -4,7 +4,7 @@
  * 语言选择逻辑与 useI18n 对齐（localStorage 'veilconnect-language' → 浏览器语言 → 基础码 → 默认）。
  * 覆盖与主界面一致的 15 种语言；键集由 tests/gateI18nParity 对齐测试兜底。
  */
-import { DEFAULT_LANGUAGE } from '../renderer/i18n/languages';
+import { DEFAULT_LANGUAGE, geoDefaultLanguage } from '../renderer/i18n/languages';
 
 export interface GateStrings {
   loading: string;
@@ -328,6 +328,9 @@ export function resolveGateLang(): string {
       const base = nav.split('-')[0];
       const hit = Object.keys(GATE_TRANSLATIONS).find(c => c === base || c.split('-')[0] === base);
       if (hit) return hit;
+      // 浏览器语言匹配不上 → 用 Cloudflare 边缘注入的地理默认语言兜底（仅托管版有）
+      const geo = geoDefaultLanguage();
+      if (geo && GATE_TRANSLATIONS[geo]) return geo;
     }
   } catch { /* ignore */ }
   return DEFAULT_LANGUAGE;

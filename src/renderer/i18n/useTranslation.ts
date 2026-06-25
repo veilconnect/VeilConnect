@@ -1,6 +1,6 @@
 import { useState, useEffect, createContext, useContext } from 'react';
 import { translations, Translations } from './translations';
-import { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './languages';
+import { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, geoDefaultLanguage } from './languages';
 
 interface I18nContextType {
   currentLanguage: string;
@@ -46,8 +46,14 @@ export const useI18n = () => {
       if (matchingLanguage && translations[matchingLanguage.code]) {
         return matchingLanguage.code;
       }
+
+      // 浏览器语言匹配不上 → 用 Cloudflare 边缘注入的地理默认语言兜底（仅托管版有）
+      const geo = geoDefaultLanguage();
+      if (geo && translations[geo]) {
+        return geo;
+      }
     }
-    
+
     return DEFAULT_LANGUAGE;
   });
 
