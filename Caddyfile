@@ -1,5 +1,9 @@
 # Caddy 反向代理 + 自动 HTTPS。WebSocket（信令）由 Caddy 自动透传，无需额外配置。
 {$DOMAIN} {
 	encode zstd gzip
+	# HSTS：强制后续一年只走 HTTPS，防 SSL strip 降级。仅公网(Let's Encrypt 受信证书)启用；
+	# 自签/LAN 用 Caddyfile.local（不加 HSTS，避免把不受信证书的主机锁死在 HTTPS）。
+	# 不含 includeSubDomains/preload，以兼容 sslip.io 等共享域名。
+	header Strict-Transport-Security "max-age=31536000"
 	reverse_proxy app:3001
 }

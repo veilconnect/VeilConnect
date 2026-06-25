@@ -130,6 +130,14 @@ if [ -n "$TURN_SECRET" ]; then
 else
   TURN_SECRET="$(openssl rand -hex 32)"
 fi
+# coturn 中继 SSRF 加固：仅公网模式禁止中继到环回/私网/链路本地/CGNAT，
+# 防 network_mode:host 下 coturn 被当作打内网的跳板。local/LAN 模式必须留空，
+# 否则会拒绝合法私网对端、打断局域网互连。可经环境变量 TURN_EXTRA_ARGS 覆盖。
+TURN_EXTRA_ARGS="${TURN_EXTRA_ARGS:-$(env_default TURN_EXTRA_ARGS)}"
+if [ -z "$TURN_EXTRA_ARGS" ] && [ "$MODE" = "public" ]; then
+  TURN_EXTRA_ARGS="--no-loopback-peers --denied-peer-ip=10.0.0.0-10.255.255.255 --denied-peer-ip=172.16.0.0-172.31.255.255 --denied-peer-ip=192.168.0.0-192.168.255.255 --denied-peer-ip=169.254.0.0-169.254.255.255 --denied-peer-ip=100.64.0.0-100.127.255.255"
+fi
+
 cat > "$ROOT/.env" <<EOF
 DOMAIN=$DOMAIN
 EXTERNAL_IP=$EXTERNAL_IP
@@ -140,8 +148,10 @@ HTTPS_PORT=$HTTPS_PORT
 CADDYFILE=$CADDYFILE
 PUBLIC_ORIGIN=$PUBLIC_ORIGIN
 TURN_TRANSPORT=$TURN_TRANSPORT
+TURN_EXTRA_ARGS=$TURN_EXTRA_ARGS
 EOF
-c_green "✓ 已写入 .env"
+chmod 600 "$ROOT/.env"   # 含 TURN_SECRET，限制为属主可读写
+c_green "✓ 已写入 .env（chmod 600）"
 
 # --- 5. 防火墙（仅在 ufw active 时操作） ---
 if command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status 2>/dev/null | grep -q "Status: active"; then

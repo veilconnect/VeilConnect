@@ -36,6 +36,11 @@ services:
     image: coturn/coturn:4.6
     restart: unless-stopped
     network_mode: host    # coturn 处理 relay 需直接访问主机网络/端口
+    # 注意：command 用 YAML 折叠标量(>)，块内 '#' 是字面文本而非注释，故说明只能写在块外。
+    # --total-quota/--user-quota：/turn-credentials 无鉴权(同源 GET 不带 Origin 无法拦)，
+    #   故在中继层封顶并发会话数，缓解脚本盗刷带宽；只限会话数不限 bps，不拖慢合法 relay 文件传输。
+    # ${TURN_EXTRA_ARGS}：公网部署由 install.sh 填入 --no-loopback-peers + 私网段 denied-peer-ip
+    #   (抗 SSRF，防 network_mode:host 下中继被当内网跳板)；local/LAN 留空，否则拒绝合法私网对端。
     command: >
       -n --no-cli --no-tls --no-dtls
       --listening-port=3478
@@ -48,11 +53,9 @@ services:
       --relay-ip=${EXTERNAL_IP}
       --external-ip=${EXTERNAL_IP}
       --no-multicast-peers
-      # 抗滥用：/turn-credentials 无鉴权（同源 GET 不带 Origin，无法用 Origin 拦），
-      # 故在中继层封顶并发会话数，缓解脚本盗刷 TURN 中继带宽。只限会话数、不限单会话 bps，
-      # 以免拖慢合法的 relay 文件传输（吞吐本就是瓶颈）。生产可按机器带宽调大/调小。
       --total-quota=${TURN_TOTAL_QUOTA:-1200}
       --user-quota=${TURN_USER_QUOTA:-12}
+      ${TURN_EXTRA_ARGS:-}
 
   caddy:
     image: caddy:2
