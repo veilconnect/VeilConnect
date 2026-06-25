@@ -238,7 +238,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
       padding: '1.5rem',
       borderRadius: '8px',
       marginTop: '2rem',
-      textAlign: 'left' as const
+      textAlign: 'start' as const
     }
   };
 
@@ -317,7 +317,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
         ) : (
           <div style={styles.card}>
             <h2 style={{ color: '#667eea' }}>{t.completion.title}</h2>
-            <div style={{ margin: '2rem 0', textAlign: 'left' }}>
+            <div style={{ margin: '2rem 0', textAlign: 'start' }}>
               <p><strong>{t.identity.userId}</strong> {userIdentity.publicId}</p>
               <p><strong>{t.identity.nickname}</strong> {userIdentity.nickname}</p>
               <p>{userIdentity.avatar}</p>

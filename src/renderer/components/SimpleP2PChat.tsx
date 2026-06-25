@@ -1573,7 +1573,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       backgroundColor: getStatusColor()
     },
     secureBadge: {
-      marginLeft: '12px',
+      marginInlineStart: '12px',
       padding: '2px 8px',
       borderRadius: '10px',
       color: 'white',
@@ -1645,7 +1645,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       background: '#667eea',
       color: 'white',
       alignSelf: 'flex-end',
-      marginLeft: 'auto'
+      marginInlineStart: 'auto'
     },
     receivedMessage: {
       background: '#e9ecef',
@@ -1695,7 +1695,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       color: '#2d3748'
     },
     fileCardSent: {
-      marginLeft: 'auto',
+      marginInlineStart: 'auto',
       background: '#eef0ff',
       borderColor: '#c8cef7'
     },
@@ -1763,7 +1763,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     <div style={styles.container}>
       {/* 瞬时提示浮层（右上角，自动消失），不污染聊天记录 */}
       {toasts.length > 0 && (
-        <div style={{ position: 'fixed', top: 14, right: 14, zIndex: 2000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+        <div style={{ position: 'fixed', top: 14, insetInlineEnd: 14, zIndex: 2000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
           {toasts.map(t => (
             <div key={t.id} style={{
               padding: '9px 14px', borderRadius: 8, color: 'white', fontSize: 13, boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
