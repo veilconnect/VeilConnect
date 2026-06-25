@@ -50,6 +50,7 @@ import {
   readStaticTurn
 } from '../../web/webrtc/iceConfig';
 import { waitForDataChannelBackpressure } from '../../web/webrtc/backpressure';
+import { reportPairingSuccess } from '../../web/metrics';
 
 /** 从链接或裸 hash 解析房间参数：支持完整 URL（含 #room=..&t=..）或纯 'room=..&t=..'。 */
 function parseRoomLink(input: string): { roomId: string; token: string } | null {
@@ -212,6 +213,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const pairRequiredRef = useRef<boolean>(false);     // 本会话是否启用配对码
   const pairCodeRef = useRef<string | null>(null);    // 归一化后的配对码（host 生成 / guest 输入）
   const pairVerifiedRef = useRef<boolean>(false);
+  const pairReportedRef = useRef<boolean>(false);          // 匿名计数去重：本次连接是否已上报过配对成功
   const pairSelfKeysRef = useRef<PartyKeys | null>(null);   // 本端身份/box/棘轮三元组
   const pairPeerKeysRef = useRef<PartyKeys | null>(null);   // 对端三元组（来自 hello）
   const pairMaterialsRef = useRef<PairingMaterials | null>(null);
@@ -338,6 +340,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     myRevealSentRef.current = false;
     pairSelfNonceRef.current = null;
     if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
+    pairReportedRef.current = false; // 重置匿名计数去重：下次新配对成功可再计一次
     setSecureStatus('idle');
     setPeerInfo(null);
     setSafetyCode('');
@@ -380,6 +383,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const isContentUnlocked = useCallback(() => (
     contentGateOpen(pairRequiredRef.current, pairVerifiedRef.current, sasConfirmedRef.current)
   ), []);
+
+  // 匿名使用计数：配对/SAS 验证成功（密码学确认无中间人）时,仅由 host 一端、每次连接至多一次
+  // 上报一个【空】信标,使「一次成功配对 = +1」。不含任何身份/房间/IP/内容/精确时间。详见 web/metrics.ts。
+  useEffect(() => {
+    if (role === 'host' && !pairReportedRef.current
+        && contentGateOpen(pairRequired, pairVerified, sasConfirmed)) {
+      pairReportedRef.current = true;
+      reportPairingSuccess();
+    }
+  }, [role, pairRequired, pairVerified, sasConfirmed]);
 
   // 修改本机昵称（对端在握手后会看到它）
   const renameSelf = useCallback(async () => {

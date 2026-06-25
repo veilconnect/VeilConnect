@@ -177,6 +177,19 @@ describe('SignalingServer 安全加固', () => {
         }
     });
 
+    test('匿名配对计数：POST /metrics/pair 自增，GET /metrics 读回总数与按天，不记任何标识', async () => {
+        const before = await (await fetch(`http://localhost:${port}/metrics`, { headers: { origin: ORIGIN } })).json();
+        const r = await fetch(`http://localhost:${port}/metrics/pair`, { method: 'POST', headers: { origin: ORIGIN } });
+        const body = await r.json();
+        expect(body.ok).toBe(true);
+        const after = await (await fetch(`http://localhost:${port}/metrics`, { headers: { origin: ORIGIN } })).json();
+        expect(after.total).toBe((before.total || 0) + 1);
+        // 仅聚合字段，无任何逐事件/IP/房间记录
+        expect(Object.keys(after).sort()).toEqual(['days', 'total']);
+        const day = new Date().toISOString().slice(0, 10);
+        expect(after.days[day]).toBeGreaterThanOrEqual(1);
+    });
+
     test('CSP connect-src 收敛：含 self/wss/ws，但不含宽松的裸 https:（防注入脚本外传明文）', async () => {
         const resp = await fetch(`http://localhost:${port}/health`, { headers: { origin: ORIGIN } });
         const csp = resp.headers.get('content-security-policy') || '';

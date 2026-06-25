@@ -146,6 +146,22 @@ export default {
       return blobDownload(url.pathname.slice('/blob/'.length), request, env);
     }
 
+    // —— 匿名使用计数（一次成功配对 = +1，无任何身份/IP/内容/精确时间）——
+    // 路由到单例 DO（idFromName('__metrics__')）做持久原子计数。
+    if (url.pathname === '/metrics/pair' && request.method === 'POST') {
+      if (!isOriginAllowed(origin, env)) {
+        return new Response('Origin not allowed', { status: 403, headers: corsHeaders(origin, env) });
+      }
+      const stub = env.SIGNALING_ROOM.get(env.SIGNALING_ROOM.idFromName('__metrics__'));
+      const r = await stub.fetch('https://do/__incr', { method: 'POST' });
+      return new Response(await r.text(), { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders(origin, env) } });
+    }
+    if (url.pathname === '/metrics' && request.method === 'GET') {
+      const stub = env.SIGNALING_ROOM.get(env.SIGNALING_ROOM.idFromName('__metrics__'));
+      const r = await stub.fetch('https://do/__count');
+      return new Response(await r.text(), { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders(origin, env) } });
+    }
+
     // WebSocket 升级 → 路由到房间 DO。
     // 注:房间 token 爆破由 DO 内「失败 join 限流」(每 IP 10 次/分钟)挡住;
     // 连接洪泛(海量 WS 建连)建议在 Cloudflare 仪表盘配 WAF/Rate Limiting 规则在边缘拦截。

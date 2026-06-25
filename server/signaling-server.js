@@ -77,6 +77,10 @@ class SignalingServer {
         this.blobs = new Map(); // id -> { size, expiresAt }
         if (this.blobEnabled) this.initBlobStore();
 
+        // 匿名使用计数（一次成功配对 = +1）：仅一个全局总数 + 按天总数，绝不记 IP/身份/房间/内容。
+        // 内存态——自部署进程重启即归零（可接受;运维想长期留存可自行落库）。
+        this.pairMetric = { total: 0, days: {} };
+
         this.setupMiddleware();
         this.setupRoutes();
         this.setupWebSocket();
@@ -265,7 +269,21 @@ class SignalingServer {
                 clients: this.clients.size
             });
         });
-        
+
+        // —— 匿名使用计数：一次成功配对 = +1（仅全局总数 + 按天总数，无 IP/身份/房间/内容）——
+        // 自部署 SPA 与本服务同源，信标为同源请求；Origin 守卫中间件已放行。不在此记录任何 IP。
+        this.app.post('/metrics/pair', (req, res) => {
+            this.pairMetric.total += 1;
+            const day = new Date().toISOString().slice(0, 10);
+            this.pairMetric.days[day] = (this.pairMetric.days[day] || 0) + 1;
+            const keys = Object.keys(this.pairMetric.days).sort();
+            while (keys.length > 120) delete this.pairMetric.days[keys.shift()];
+            res.json({ ok: true, total: this.pairMetric.total });
+        });
+        this.app.get('/metrics', (req, res) => {
+            res.json({ total: this.pairMetric.total, days: this.pairMetric.days });
+        });
+
         // 仅返回房间客户端数量；不区分"房间不存在/存在"以免泄漏房间存在性
         // 始终返回 200 + clientCount（不存在则为 0），避免 404 vs 200 暴露信息
         this.app.get('/api/rooms/:roomId', (req, res) => {

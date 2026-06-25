@@ -64,7 +64,34 @@ export class SignalingRoom {
     b.count++;
   }
 
+  // 匿名使用计数（仅 idFromName('__metrics__') 这个单例 DO 会被路由到此）：
+  // 持久存于 DO storage（不受 R2 生命周期影响）；事务保证并发自增不丢。无任何身份/IP/内容。
+  async incrPairing() {
+    return await this.state.storage.transaction(async (txn) => {
+      const total = ((await txn.get('pair_total')) || 0) + 1;
+      const days = (await txn.get('pair_days')) || {};
+      const day = new Date().toISOString().slice(0, 10);
+      days[day] = (days[day] || 0) + 1;
+      const keys = Object.keys(days).sort();
+      while (keys.length > 120) delete days[keys.shift()]; // 仅留最近约 120 天
+      await txn.put('pair_total', total);
+      await txn.put('pair_days', days);
+      return total;
+    });
+  }
+
   async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/__incr' && request.method === 'POST') {
+      const total = await this.incrPairing();
+      return new Response(JSON.stringify({ ok: true, total }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.pathname === '/__count') {
+      const total = (await this.state.storage.get('pair_total')) || 0;
+      const days = (await this.state.storage.get('pair_days')) || {};
+      return new Response(JSON.stringify({ total, days }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('expected websocket', { status: 400 });
     }
