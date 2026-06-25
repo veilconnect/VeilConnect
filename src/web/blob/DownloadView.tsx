@@ -4,8 +4,10 @@
  * 大文件:支持 File System Access API 时【边解边写盘】(不占内存);否则回退内存 Blob 保存。
  * 由 index.tsx 在检测到 #dl= 时优先渲染(早于口令门禁)。
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { parseShareHash, receiveFile, BlobMeta } from './blobTransfer';
+import { downloadStrings } from './downloadI18n';
+import { resolveGateLang, isRtlLang } from '../gateI18n';
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -22,6 +24,16 @@ export const DownloadView: React.FC = () => {
   const [meta, setMeta] = useState<BlobMeta | null>(null);
   const [url, setUrl] = useState('');
   const [pct, setPct] = useState(0);
+  // 下载页在 React i18n 应用之前渲染，独立解析语言并设置文字方向（RTL）。
+  const [lang] = useState(resolveGateLang);
+  const d = downloadStrings(lang);
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = lang;
+      document.documentElement.dir = isRtlLang(lang) ? 'rtl' : 'ltr';
+    }
+  }, [lang]);
 
   const start = async () => {
     if (!parsed) return;
@@ -46,7 +58,7 @@ export const DownloadView: React.FC = () => {
       } catch (e) {
         try { if (writable) await writable.abort(); } catch { /* ignore */ }
         setStatus('error');
-        setError(parsed.needsPassword ? '下载或解密失败:密码错误,或文件已过期/损坏。' : '下载或解密失败:文件可能已过期、被删除或链接损坏。');
+        setError(parsed.needsPassword ? d.errWithPassword : d.errNoPassword);
       }
       return;
     }
@@ -61,7 +73,7 @@ export const DownloadView: React.FC = () => {
       a.href = objUrl; a.download = meta.name || 'download'; document.body.appendChild(a); a.click(); a.remove();
     } catch {
       setStatus('error');
-      setError(parsed.needsPassword ? '下载或解密失败:密码错误,或文件已过期/损坏。' : '下载或解密失败:文件可能已过期、被删除或链接损坏。');
+      setError(parsed.needsPassword ? d.errWithPassword : d.errNoPassword);
     }
   };
 
@@ -74,7 +86,7 @@ export const DownloadView: React.FC = () => {
   const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', marginBottom: 12, border: '1px solid #ddd', borderRadius: 6, fontSize: 14 };
 
   if (!parsed) {
-    return <div style={box}><div style={card}><h2 style={{ margin: 0 }}>🔒 VeilConnect</h2><p style={{ color: '#666' }}>链接无效或缺少密钥。</p></div></div>;
+    return <div style={box}><div style={card}><h2 style={{ margin: 0 }}>🔒 VeilConnect</h2><p style={{ color: '#666' }}>{d.invalidLink}</p></div></div>;
   }
 
   const working = status === 'working';
@@ -83,9 +95,9 @@ export const DownloadView: React.FC = () => {
   return (
     <div style={box}>
       <div style={card}>
-        <h2 style={{ margin: '0 0 6px', color: '#333' }}>📦 收到一个加密文件</h2>
+        <h2 style={{ margin: '0 0 6px', color: '#333' }}>{d.title}</h2>
         <p style={{ margin: '0 0 16px', color: '#666', fontSize: 13, lineHeight: 1.6 }}>
-          通过 VeilConnect 链接分享。文件在你本机解密,服务器只存密文、无密钥解不开。
+          {d.subtitle}
         </p>
 
         {finished && meta ? (
@@ -93,17 +105,17 @@ export const DownloadView: React.FC = () => {
             <div style={{ padding: 12, background: '#eef9f1', border: '1px solid #cde9d6', borderRadius: 8, marginBottom: 12 }}>
               <div style={{ fontWeight: 700, wordBreak: 'break-all' }}>{meta.name}</div>
               <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                {fmtBytes(meta.size)} · 已解密 · 校验通过 ✅{status === 'saved' ? ' · 已保存到磁盘' : ''}
+                {fmtBytes(meta.size)} · {d.decryptedVerified}{status === 'saved' ? d.savedToDiskSuffix : ''}
               </div>
             </div>
             {status === 'done' && url && (
-              <a href={url} download={meta.name} style={{ ...btn, display: 'block', textAlign: 'center', textDecoration: 'none', boxSizing: 'border-box' }}>⬇ 重新下载</a>
+              <a href={url} download={meta.name} style={{ ...btn, display: 'block', textAlign: 'center', textDecoration: 'none', boxSizing: 'border-box' }}>{d.redownload}</a>
             )}
           </div>
         ) : (
           <div>
             {parsed.needsPassword && (
-              <input style={input} type="password" placeholder="提取密码" value={password} autoFocus
+              <input style={input} type="password" placeholder={d.passwordPlaceholder} value={password} autoFocus
                 onChange={e => setPassword(e.target.value)} onKeyPress={e => { if (e.key === 'Enter') void start(); }}
                 disabled={working} />
             )}
@@ -113,15 +125,15 @@ export const DownloadView: React.FC = () => {
                 <div style={{ height: 8, background: '#eee', borderRadius: 4, overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${Math.max(2, pct)}%`, background: 'linear-gradient(135deg,#667eea,#764ba2)', transition: 'width .2s' }} />
                 </div>
-                <div style={{ fontSize: 12, color: '#888', marginTop: 6, textAlign: 'center' }}>下载并解密中… {pct}%</div>
+                <div style={{ fontSize: 12, color: '#888', marginTop: 6, textAlign: 'center' }}>{d.progress.replace('{pct}', String(pct))}</div>
               </div>
             )}
             <button style={{ ...btn, opacity: working ? 0.6 : 1 }} onClick={() => void start()} disabled={working}>
-              {working ? '处理中…' : (parsed.needsPassword ? '输入密码并下载' : '⬇ 下载并解密')}
+              {working ? d.processing : (parsed.needsPassword ? d.downloadWithPassword : d.downloadDecrypt)}
             </button>
           </div>
         )}
-        <p style={{ margin: '16px 0 0', color: '#999', fontSize: 12 }}>下载链接含解密密钥,请勿转发给不该看到此文件的人。</p>
+        <p style={{ margin: '16px 0 0', color: '#999', fontSize: 12 }}>{d.keyWarning}</p>
       </div>
     </div>
   );
