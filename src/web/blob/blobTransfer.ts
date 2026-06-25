@@ -264,5 +264,8 @@ export async function decodeBlobStream(
   if (received !== meta.size) throw new Error('size mismatch (truncated)');
 
   if (opts.sink) return { meta };
-  return { meta, blob: new Blob(parts as unknown as BlobPart[], { type: meta.mime || 'application/octet-stream' }) };
+  // 安全：Blob 一律标为 application/octet-stream，绝不用对端可控的 meta.mime。
+  // 否则 text/html 文件经 URL.createObjectURL 得到本源 blob: URL，手动导航即可在应用源执行脚本
+  // （存储型 XSS，可窃取本地身份/密钥）。真实 mime 仍保留在 meta.mime 供 UI 展示/另存判断。
+  return { meta, blob: new Blob(parts as unknown as BlobPart[], { type: 'application/octet-stream' }) };
 }

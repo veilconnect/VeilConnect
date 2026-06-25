@@ -177,6 +177,17 @@ describe('SignalingServer 安全加固', () => {
         }
     });
 
+    test('CSP connect-src 收敛：含 self/wss/ws，但不含宽松的裸 https:（防注入脚本外传明文）', async () => {
+        const resp = await fetch(`http://localhost:${port}/health`, { headers: { origin: ORIGIN } });
+        const csp = resp.headers.get('content-security-policy') || '';
+        const connectSrc = (csp.match(/connect-src ([^;]*)/) || [, ''])[1].trim();
+        expect(connectSrc).toContain("'self'");
+        expect(connectSrc).toContain('wss:');
+        expect(connectSrc).toContain('ws:');
+        // 裸 https:（scheme-only）会放行向任意 HTTPS 主机外传 → 必须不在白名单内
+        expect(connectSrc.split(/\s+/)).not.toContain('https:');
+    });
+
     describe('clientIp（反代后真实 IP 解析）', () => {
         const fakeReq = (xff, socketIp = '10.0.0.5') => ({
             headers: xff === undefined ? {} : { 'x-forwarded-for': xff },

@@ -53,6 +53,15 @@ describe('blobTransfer (网盘式 · 流式分块 VCB2)', () => {
       expect(Array.from(await blobBytes(blob!))).toEqual(Array.from(big));
     });
 
+    it('安全:解出的 Blob 一律 octet-stream,绝不沿用对端 mime(防本源 blob: 存储型 XSS)', async () => {
+      const key = await deriveContentKey(generateRawKey());
+      const html = new TextEncoder().encode('<script>alert(document.domain)</script>');
+      const { meta, blob } = await decodeBlobStream(
+        buildUploadStream(fakeFile(html, 'evil.html', 'text/html'), key), key);
+      expect(meta.mime).toBe('text/html');                 // 元数据保留真实 mime
+      expect(blob!.type).toBe('application/octet-stream');  // 但 Blob 不可执行
+    });
+
     it('sink 模式:逐块写出,不返回 blob', async () => {
       const key = await deriveContentKey(generateRawKey());
       const parts: Uint8Array[] = [];

@@ -211,12 +211,15 @@ class SignalingServer {
     }
     
     setupMiddleware() {
-        // 安全响应头（网页托管）：CSP 限制脚本仅本地（抗 XSS），放行 ws/wss 信令与 https TURN 拉取。
-        // worker-src 'self' blob: 以兼容打包出的加密 Web Worker。WebRTC(UDP) 不受 CSP 约束。
+        // 安全响应头（网页托管）：CSP 限制脚本仅本地（抗 XSS），放行同源 + ws/wss 信令。
+        // connect-src 收敛为 'self' wss: ws:（去掉宽松的 https:，避免注入脚本外传明文到任意 HTTPS 站）；
+        // 自部署默认 TURN 凭据(/turn-credentials)与 blob 均同源('self' 覆盖)。WebRTC(UDP) 不受 CSP 约束。
+        // 注：若把 VC_TURN_ENDPOINT 指向跨域 https Worker，需在此 connect-src 显式加入该来源。
+        // worker-src 'self' blob: 以兼容打包出的加密 Web Worker。
         this.app.use((req, res, next) => {
             res.setHeader('Content-Security-Policy',
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-                "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: wss: ws:; " +
+                "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: ws:; " +
                 "worker-src 'self' blob:; base-uri 'self'; form-action 'self'");
             res.setHeader('X-Content-Type-Options', 'nosniff');
             res.setHeader('Referrer-Policy', 'no-referrer');
@@ -340,6 +343,10 @@ class SignalingServer {
                 const fp = path.join(this.blobDir, id);
                 if (!meta || Date.now() > meta.expiresAt || !fs.existsSync(fp)) return res.status(404).json({ error: 'not found or expired' });
                 res.setHeader('Content-Type', 'application/octet-stream');
+                // 强制按附件下载、禁止 MIME 嗅探（全局中间件已加 nosniff，此处再钉一次随响应走），
+                // 防止直接导航到 /blob/:id 时浏览器把内容当 HTML 在本源渲染（存储型 XSS）。
+                res.setHeader('Content-Disposition', 'attachment');
+                res.setHeader('X-Content-Type-Options', 'nosniff');
                 res.setHeader('Content-Length', meta.size);
                 res.setHeader('Cache-Control', 'no-store');
                 fs.createReadStream(fp).pipe(res);

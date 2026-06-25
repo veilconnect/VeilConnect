@@ -48,6 +48,11 @@ services:
       --relay-ip=${EXTERNAL_IP}
       --external-ip=${EXTERNAL_IP}
       --no-multicast-peers
+      # 抗滥用：/turn-credentials 无鉴权（同源 GET 不带 Origin，无法用 Origin 拦），
+      # 故在中继层封顶并发会话数，缓解脚本盗刷 TURN 中继带宽。只限会话数、不限单会话 bps，
+      # 以免拖慢合法的 relay 文件传输（吞吐本就是瓶颈）。生产可按机器带宽调大/调小。
+      --total-quota=${TURN_TOTAL_QUOTA:-1200}
+      --user-quota=${TURN_USER_QUOTA:-12}
 
   caddy:
     image: caddy:2
