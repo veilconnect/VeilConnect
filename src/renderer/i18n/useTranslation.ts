@@ -11,6 +11,10 @@ interface I18nContextType {
 
 export const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
+// 从右向左书写的语言（按基础语言码匹配）。目前列表中仅阿拉伯语(ar)；
+// 后续若加入希伯来语(he)/波斯语(fa)/乌尔都语(ur)只需在此登记。
+const RTL_LANGUAGES = new Set(['ar', 'he', 'fa', 'ur']);
+
 export const useTranslation = () => {
   const context = useContext(I18nContext);
   if (!context) {
@@ -57,9 +61,11 @@ export const useI18n = () => {
   };
 
   useEffect(() => {
-    // 设置HTML lang属性
+    // 设置 HTML lang 属性，并按语言切换文字方向（RTL 语言如阿拉伯语需 dir=rtl）
     if (typeof document !== 'undefined') {
       document.documentElement.lang = currentLanguage;
+      const base = currentLanguage.split('-')[0];
+      document.documentElement.dir = RTL_LANGUAGES.has(base) ? 'rtl' : 'ltr';
     }
   }, [currentLanguage]);
 
