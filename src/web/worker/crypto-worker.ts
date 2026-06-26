@@ -40,7 +40,7 @@ let booted = false;
 /** 发给主线程的身份对象一律剥离 secretKey（移植自 main.ts:toRendererIdentity）。 */
 function toRendererIdentity<T extends { secretKey?: string } | null>(identity: T): T {
   if (!identity) return identity;
-  const { secretKey, ...safe } = identity as any;
+  const { secretKey: _secretKey, ...safe } = identity as any;
   return safe as T;
 }
 

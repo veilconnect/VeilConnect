@@ -56,7 +56,7 @@ veilconnect/
 ├── server/signaling-server.js         # 信令服务器（房间 + /turn-credentials + 托管 SPA）
 ├── webpack.web.config.js              # 网页 SPA + Worker 打包（输出 server/public）
 ├── Dockerfile · docker-compose.yml · Caddyfile · .env.example   # 一键自部署栈
-├── tests/                             # Jest 单元测试（134 cases）
+├── tests/                             # Jest 单元/集成测试（304 cases）
 └── jest.config.js
 ```
 
@@ -102,7 +102,7 @@ sudo bash /opt/veilconnect/scripts/uninstall.sh
 ```bash
 npm install               # 装依赖
 npm run typecheck         # tsc --noEmit
-npm test                  # 跑 134 个单元测试
+npm test                  # 跑 304 个单元/集成测试
 npm run build:web         # 打包 SPA + Worker 到 server/public
 npm run dev:web           # webpack dev server（热重载，8080）
 ```
@@ -180,7 +180,7 @@ cipher = AES-256-GCM(JSON.stringify(identity), key, iv)
 - **可复现构建**：`npm ci` + 精确钉死的密码学依赖，可字节级复现并比对官方哈希。详见 [`docs/REPRODUCIBLE_BUILD.md`](docs/REPRODUCIBLE_BUILD.md)。
 - **威胁模型（STRIDE）**：逐角色/逐类别列出能与不能，并指向对应测试断言。详见 [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md)、[`docs/security/CRYPTO_RATIONALE.md`](docs/security/CRYPTO_RATIONALE.md)。
 - **信令隐私默认**：信令服务器默认**不记录**任何元数据（IP/clientId/roomId）；排障才设 `SIGNAL_VERBOSE=1`。
-- **CI 门禁**：`.github/workflows/ci.yml` 跑 typecheck + ESLint + 134 测试 + 构建 + SRI 校验 + 服务端测试 + 生产依赖审计。
+- **CI 门禁**：`.github/workflows/ci.yml` 跑 typecheck + Electron typecheck + ESLint + 304 测试 + 构建 + SRI 校验 + 服务端测试 + 生产依赖审计。
 
 ---
 
@@ -188,20 +188,20 @@ cipher = AES-256-GCM(JSON.stringify(identity), key, iv)
 
 ```
 $ npm test
-Test Suites: 13 passed, 13 total
-Tests:       134 passed, 134 total
+Test Suites: 21 passed, 21 total
+Tests:       304 passed, 304 total
 
 File                       | % Stmts | % Branch | % Funcs | % Lines
-All files                  |   86.26 |    62.13 |   87.15 |   88.32
+All files                  |   85.77 |    64.65 |   86.55 |   87.55
  CryptoManager.ts          |   91.66 |    28.57 |     100 |   91.66
  RatchetManager.ts         |   93.22 |       75 |       88 |    93.1
- IdentityManager.ts        |   75.31 |    50.90 |   73.07 |   78.91
+ IdentityManager.ts        |   74.84 |    49.01 |   73.07 |   78.52
  PresenceManager.ts        |   98.07 |      100 |   93.75 |    100
  MessageHistoryManager.ts  |   90.69 |       75 |   89.65 |   93.93
 ```
 
 > 信令服务器的安全加固测试（房间 token、失败 join 限速、反代真实 IP 解析、限速桶清理）单独跑（依赖 `server/node_modules`）：
-> `npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js"` → 10 passed。
+> `npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js"` → 12 passed。
 
 关键的安全断言（不仅是 happy path）：
 

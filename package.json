@@ -59,7 +59,7 @@
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",
     "css-loader": "^6.8.0",
-    "electron": "^33.4.11",
+    "electron": "^42.5.0",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^5.2.0",
     "html-webpack-plugin": "^5.5.0",
@@ -73,7 +73,7 @@
     "typescript-eslint": "^8.61.1",
     "webpack": "^5.88.0",
     "webpack-cli": "^5.1.0",
-    "webpack-dev-server": "^4.15.0"
+    "webpack-dev-server": "^5.2.5"
   },
   "optionalDependencies": {
     "node-datachannel": "^0.32.3",

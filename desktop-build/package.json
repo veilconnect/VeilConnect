@@ -4,6 +4,6 @@
   "private": true,
   "description": "隔离的桌面打包依赖（electron-builder）。把它从根 package.json 拆出来：① 锁定 electron-builder 的【完整传递依赖树】(本目录 package-lock.json 带 integrity，npm ci 逐包校验) 以堵供应链口子；② 让只做网页/自托管的贡献者 `npm install` 时不被迫拉这一大坨桌面打包依赖。仅 CI/发布与本地 `npm run dist` 使用。",
   "devDependencies": {
-    "electron-builder": "25.1.8"
+    "electron-builder": "26.15.3"
   }
 }

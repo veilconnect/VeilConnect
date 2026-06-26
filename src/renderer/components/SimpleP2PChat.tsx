@@ -20,6 +20,20 @@ import {
 } from '../../web/fileTransfer/fileTransfer';
 import { deriveSafetyCode } from '../../web/security/safetyCode';
 import { shareFile } from '../../web/blob/blobTransfer';
+import type {
+  FileTransferStatus,
+  FileTransferView,
+  Message,
+  ReceivingFile,
+  SecureStatus,
+  SelfIdentity
+} from './p2p/chatModel';
+import {
+  displayNickname,
+  formatIdentityLabel,
+  parseRoomLink,
+  randomTransferId
+} from './p2p/chatUtils';
 
 // 异步文件(网盘式)总开关:自部署默认开;托管版(无 /blob 后端)构建期注入 __VC_BLOB_ENABLED__=false 隐藏入口。
 declare const __VC_BLOB_ENABLED__: boolean | undefined;
@@ -51,78 +65,6 @@ import {
 } from '../../web/webrtc/iceConfig';
 import { waitForDataChannelBackpressure } from '../../web/webrtc/backpressure';
 import { reportPairingSuccess } from '../../web/metrics';
-
-/** 从链接或裸 hash 解析房间参数：支持完整 URL（含 #room=..&t=..）或纯 'room=..&t=..'。 */
-function parseRoomLink(input: string): { roomId: string; token: string } | null {
-  try {
-    const hash = input.includes('#') ? input.slice(input.indexOf('#') + 1) : input;
-    const params = new URLSearchParams(hash);
-    const roomId = params.get('room');
-    const token = params.get('t');
-    if (roomId && token) return { roomId, token };
-  } catch { /* ignore */ }
-  return null;
-}
-
-interface Message {
-  id: string;
-  text: string;
-  type: 'sent' | 'received' | 'system';
-  timestamp: number;
-}
-
-interface SelfIdentity {
-  userId: string;
-  publicKey: string;
-  boxPublicKey?: string;
-  keyBindingSignature?: string;
-  nickname: string;
-}
-
-type SecureStatus = 'idle' | 'pending' | 'secure' | 'failed';
-
-type FileTransferStatus = 'sending' | 'receiving' | 'completed' | 'failed' | 'cancelled';
-type FileTransferDirection = 'sent' | 'received';
-
-interface FileTransferView {
-  id: string;
-  direction: FileTransferDirection;
-  name: string;
-  size: number;
-  mime: string;
-  progress: number;
-  status: FileTransferStatus;
-  url?: string;
-  error?: string;
-}
-
-interface ReceivingFile {
-  meta: FileOfferMeta;
-  key: CryptoKey;
-  assembler: ChunkAssembler;
-  lastPct?: number; // 进度节流：上次已上报的整百分点
-}
-
-function displayNickname(nickname: string | undefined | null): string {
-  const name = (nickname || '').trim();
-  if (!name) return '';
-  if (name === 'Guest User' || name === '匿名用户' || name === '未知用户') return '';
-  if (/^User_[a-z0-9]+_[a-z0-9]+$/i.test(name)) return '';
-  return name;
-}
-
-function formatIdentityLabel(prefix: string, nickname: string | undefined | null, userId: string | undefined | null): string {
-  const name = displayNickname(nickname);
-  const id = (userId || '').trim();
-  if (name && id) return `${prefix}${name} · ${id}`;
-  if (name) return `${prefix}${name}`;
-  return `${prefix}${id}`;
-}
-
-function randomTransferId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-}
 
 interface SimpleP2PChatProps {
   userIdentity?: {
@@ -295,7 +237,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       iceReadyRef.current?.resolve();
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [t.chat.p2p.relayNotReady]);
 
   // 瞬时提示（toast）：状态/提示不再塞进聊天记录，改为右上角浮层、自动消失
   const pushToast = useCallback((text: string, kind: 'info' | 'warn' | 'error' = 'info') => {
@@ -358,7 +300,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         disconnectRef.current?.();
       }
     }, PAIR_HANDSHAKE_TIMEOUT_MS);
-  }, [log]);
+  }, [log, t.chat.p2p.pairTimedOut]);
 
   // 进入配对模式（fail-closed 总开关）：任何一端要求、或收到任何 pair-* 帧都会调用。
   // 一旦进入：① 启动超时；② 若此前已走手动 SAS 放行（疑似 late 配对帧/降级注入），立即断开。
@@ -375,7 +317,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       log(t.chat.p2p.pairFailed, 'ERROR');
       disconnectRef.current?.();
     }
-  }, [armPairingTimeout, log]);
+  }, [armPairingTimeout, log, t.chat.p2p.pairFailed]);
 
   useEffect(() => { enterPairingModeRef.current = enterPairingMode; }, [enterPairingMode]);
 
@@ -406,7 +348,13 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     } catch {
       pushToast(t.chat.p2p.nicknameUpdateFailed, 'error');
     }
-  }, [myName, pushToast]);
+  }, [
+    myName,
+    pushToast,
+    t.chat.p2p.nicknameUpdateFailed,
+    t.chat.p2p.nicknameUpdated,
+    t.chat.p2p.setNicknamePrompt
+  ]);
 
   const addMessage = useCallback((text: string, type: 'sent' | 'received' | 'system') => {
     const newMessage: Message = {
@@ -537,7 +485,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
         dev(`加载本地身份失败: ${err}`);
       }
     })();
-  }, [log, dev]);
+  }, [log, dev, t.chat.p2p.loadIdentityFailed]);
 
   // 创建（并记忆化）本地 ratchet prekey bundle，并用长期 Ed25519 身份私钥签名其身份公钥
   const ensureBundle = useCallback(async () => {
@@ -584,7 +532,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       dev(`发起安全握手失败: ${err instanceof Error ? err.message : err}`);
       setSecureStatus('failed');
     }
-  }, [log, dev, ensureBundle]);
+  }, [log, dev, ensureBundle, t.chat.p2p.identityIncomplete, t.chat.p2p.secureChannelFailed]);
 
   const handleFileCancel = useCallback((id: string) => {
     receivingFilesRef.current.delete(id);
@@ -814,7 +762,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       dev(`identity verification failed: ${err instanceof Error ? err.message : err}`);
       disconnectRef.current?.();
     }
-  }, [log, dev, loadHistory, ensureBundle]);
+  }, [
+    log,
+    dev,
+    loadHistory,
+    ensureBundle,
+    t.chat.p2p.e2eEstablished,
+    t.chat.p2p.e2eEstablishing,
+    t.chat.p2p.loadIdentityFailed,
+    t.chat.p2p.peerVerifyFailed
+  ]);
 
   // 收到密文：经 Double Ratchet 解密（棘轮天然抗重放：每条消息密钥用后即删）
   // SAS 确认后放行此前入队的对端可见内容（文本进聊天记录、文件 offer 进入接收流程）。
@@ -883,7 +840,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     } catch {
       dev('收到无法解密的消息（已丢弃）');
     }
-  }, [addMessage, handleFileCancel, handleFileOffer, persistMessage, log, dev, isContentUnlocked]);
+  }, [
+    addMessage,
+    handleFileCancel,
+    handleFileOffer,
+    persistMessage,
+    log,
+    dev,
+    isContentUnlocked,
+    t.chat.p2p.e2eEstablished
+  ]);
 
   // 让 handleHello（前段定义）能顺序 await 重放缓冲密文(handleCipher 本身是 async)。
   useEffect(() => { handleCipherRef.current = handleCipher; }, [handleCipher]);
@@ -1039,7 +1005,16 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       dev(`创建 PeerConnection 失败: ${error}`);
       return null;
     }
-  }, [log, dev, resetSecureState, startHeartbeat, stopHeartbeat]);
+  }, [
+    log,
+    dev,
+    resetSecureState,
+    startHeartbeat,
+    stopHeartbeat,
+    t.chat.p2p.connectFailed,
+    t.chat.p2p.connectedEstablishing,
+    t.chat.p2p.relayNotice
+  ]);
 
   // 设置数据通道
   const setupDataChannel = useCallback((channel: RTCDataChannel) => {
@@ -1099,7 +1074,19 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     };
 
     setDc(channel);
-  }, [log, resetSecureState, clearFileTransferState, sendIdentity, handleHello, handleCipher, handleFileChunk, handlePairCommit, handlePairReveal]);
+  }, [
+    log,
+    dev,
+    resetSecureState,
+    clearFileTransferState,
+    sendIdentity,
+    handleHello,
+    handleCipher,
+    handleFileChunk,
+    handlePairCommit,
+    handlePairReveal,
+    t.chat.p2p.peerDisconnected
+  ]);
 
   // 早到的 ICE 候选可能先于 remoteDescription 抵达：先缓冲，设好远端描述后再补加。
   const addOrBufferCandidate = useCallback(async (target: RTCPeerConnection, cand: RTCIceCandidateInit) => {
@@ -1232,7 +1219,25 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       dev(`信令连接失败: ${err instanceof Error ? err.message : err}`);
       setConnectionStatus('disconnected');
     }
-  }, [createPeerConnection, setupDataChannel, addOrBufferCandidate, flushCandidates, resetSecureState, clearFileTransferState, stopHeartbeat, log, dev]);
+  }, [
+    createPeerConnection,
+    setupDataChannel,
+    addOrBufferCandidate,
+    flushCandidates,
+    resetSecureState,
+    clearFileTransferState,
+    stopHeartbeat,
+    log,
+    dev,
+    t.chat.p2p.joinedConnecting,
+    t.chat.p2p.negotiationError,
+    t.chat.p2p.negotiationFailed,
+    t.chat.p2p.peerJoinedConnecting,
+    t.chat.p2p.peerLeft,
+    t.chat.p2p.roomReadyWaiting,
+    t.chat.p2p.serverConnectFailed,
+    t.chat.p2p.signalingError
+  ]);
 
   // host：创建房间并生成分享链接
   const createRoom = useCallback(async () => {
@@ -1276,7 +1281,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       setJoinPairInput('');
     }
     await joinRoom(parsed.roomId, parsed.token);
-  }, [inputCode, joinPairInput, joinRoom, log]);
+  }, [inputCode, joinPairInput, joinRoom, log, t.chat.p2p.invalidRoomLink, t.chat.p2p.pairMissingCode]);
 
   // 自定义房间号：host 先开房（确定性派生 roomId/token），把短号码告诉对方。
   const createRoomByCode = useCallback(async () => {
@@ -1289,7 +1294,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     setRoomCodeInput('');
     setShowRoomDialog(true);         // 复用房间面板展示「房间号」与状态
     await beginSession(true, roomId, token, 2);
-  }, [roomCodeInput, beginSession, log]);
+  }, [roomCodeInput, beginSession, log, t.chat.p2p.roomCodeTooShort]);
 
   // 自定义房间号：guest 用同一个号码加入（派生出与 host 相同的 roomId/token）。
   const joinRoomByCode = useCallback(async () => {
@@ -1299,7 +1304,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     setShowRoomCodeDialog(false);
     setRoomCodeInput('');
     await beginSession(false, roomId, token);
-  }, [roomCodeInput, beginSession, log]);
+  }, [roomCodeInput, beginSession, log, t.chat.p2p.roomCodeTooShort]);
 
   // 打开页面时若 URL 带房间参数（分享链接），自动加入；随后清掉 hash 里的 token 避免泄漏到历史
   useEffect(() => {
@@ -1336,7 +1341,20 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     } catch (error) {
       log(`${t.chat.sendFailed}: ${error}`, 'ERROR');
     }
-  }, [messageInput, dc, secureStatus, sasConfirmed, pairRequired, pairVerified, addMessage, persistMessage, log]);
+  }, [
+    messageInput,
+    dc,
+    secureStatus,
+    sasConfirmed,
+    pairRequired,
+    pairVerified,
+    addMessage,
+    persistMessage,
+    log,
+    t.chat.p2p.notSecureYet,
+    t.chat.p2p.verifySasFirst,
+    t.chat.sendFailed
+  ]);
 
   const sendFile = useCallback(async (file: File) => {
     const gateOk = contentGateOpen(pairRequired, pairVerified, sasConfirmed);
@@ -1435,7 +1453,14 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     } finally {
       setBlobBusy(false);
     }
-  }, [log, dev]);
+  }, [
+    log,
+    dev,
+    t.chat.p2p.blobFailed,
+    t.chat.p2p.blobPasswordPrompt,
+    t.chat.p2p.blobReady,
+    t.chat.p2p.blobTooLarge
+  ]);
 
   const cancelFileTransfer = useCallback((id: string) => {
     cancelledFilesRef.current.add(id);
@@ -1483,7 +1508,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     clearFileTransferState();
     stopHeartbeat();
     log(t.chat.p2p.disconnectedManual);
-  }, [pc, dc, stopHeartbeat, resetSecureState, clearFileTransferState, log]);
+  }, [pc, dc, stopHeartbeat, resetSecureState, clearFileTransferState, log, t.chat.p2p.disconnectedManual]);
 
   // 让握手回调（handleHello）能在验证失败时触发断开，避免 useCallback 定义顺序问题
   useEffect(() => {
@@ -1495,7 +1520,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     try {
       await navigator.clipboard.writeText(text);
       log(t.chat.p2p.copiedToClipboard);
-    } catch (error) {
+    } catch {
       // Fallback for older browsers
       const textArea = document.createElement('textarea');
       textArea.value = text;
@@ -1505,7 +1530,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       document.body.removeChild(textArea);
       log(t.chat.p2p.copiedToClipboard);
     }
-  }, [log]);
+  }, [log, t.chat.p2p.copiedToClipboard]);
 
   // 组件卸载时清理：仅在真正卸载时断开。
   // 注意：依赖必须为空 []，否则 disconnect 随 pc/dc 变化而重建，会在建连过程中

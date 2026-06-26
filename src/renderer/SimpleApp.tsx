@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { useTranslation } from './i18n/useTranslation';
 
 // 用户身份接口
@@ -22,45 +22,12 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string>('');
 
-  // 初始化应用
-  useEffect(() => {
-    initializeApp();
-  }, []);
-
   // 身份就绪时通知父组件
   useEffect(() => {
     if (userIdentity && onReady) {
       onReady(userIdentity);
     }
   }, [userIdentity, onReady]);
-
-  // 初始化应用
-  const initializeApp = async () => {
-    try {
-      // 检查ElectronAPI是否可用
-      if (!(window as any).electronAPI) {
-        console.error('❌ ElectronAPI不可用');
-        setError('ElectronAPI不可用，请确保应用在Electron环境中运行');
-        return;
-      }
-
-      console.log('✅ ElectronAPI可用');
-      
-      // 从electron存储加载身份
-      const savedIdentity = await (window as any).electronAPI.identity.getCurrentIdentity();
-      
-      if (savedIdentity) {
-        const identity = toUserIdentity(savedIdentity);
-        setUserIdentity(identity);
-        console.log('✅ 加载已保存的身份:', identity.publicId);
-      } else {
-        console.log('📝 未找到保存的身份，需要生成新身份');
-      }
-    } catch (error) {
-      console.error('❌ 初始化应用失败:', error);
-      setError('应用初始化失败: ' + (error as Error).message);
-    }
-  };
 
   // Base58编码函数
   const base58Encode = (buffer: Uint8Array): string => {
@@ -86,16 +53,16 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
   };
 
   // 生成会话ID
-  const generateSessionId = (): string => {
+  const generateSessionId = useCallback((): string => {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substr(2, 10);
     const platform = 'desktop';
     return `${timestamp}_${random}_${platform}`;
-  };
+  }, []);
 
   // 将主进程/worker 返回的身份（使用 userId）映射为渲染端兼容结构（使用 publicId）。
   // 私钥始终保留在主进程，渲染端不持有；sessionId 为渲染端本地生成。
-  const toUserIdentity = (saved: any): UserIdentity => ({
+  const toUserIdentity = useCallback((saved: any): UserIdentity => ({
     publicKey: saved.publicKey,
     privateKey: '', // 私钥保留在主进程，渲染端不持有
     nickname: saved.nickname,
@@ -103,7 +70,40 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
     publicId: saved.userId ?? saved.publicId,
     createdAt: saved.createdAt,
     sessionId: generateSessionId()
-  });
+  }), [generateSessionId]);
+
+  // 初始化应用
+  const initializeApp = useCallback(async () => {
+    try {
+      // 检查ElectronAPI是否可用
+      if (!(window as any).electronAPI) {
+        console.error('❌ ElectronAPI不可用');
+        setError('ElectronAPI不可用，请确保应用在Electron环境中运行');
+        return;
+      }
+
+      console.log('✅ ElectronAPI可用');
+
+      // 从electron存储加载身份
+      const savedIdentity = await (window as any).electronAPI.identity.getCurrentIdentity();
+
+      if (savedIdentity) {
+        const identity = toUserIdentity(savedIdentity);
+        setUserIdentity(identity);
+        console.log('✅ 加载已保存的身份:', identity.publicId);
+      } else {
+        console.log('📝 未找到保存的身份，需要生成新身份');
+      }
+    } catch (error) {
+      console.error('❌ 初始化应用失败:', error);
+      setError('应用初始化失败: ' + (error as Error).message);
+    }
+  }, [toUserIdentity]);
+
+  // 初始化应用
+  useEffect(() => {
+    void initializeApp();
+  }, [initializeApp]);
 
   // 生成身份
   const generateIdentity = async () => {
@@ -336,4 +336,4 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
   );
 };
 
-export default SimpleApp; 
+export default SimpleApp;

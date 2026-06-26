@@ -55,7 +55,7 @@ export const DownloadView: React.FC = () => {
         });
         await writable.close();
         setMeta(meta); setStatus('saved');
-      } catch (e) {
+      } catch {
         try { if (writable) await writable.abort(); } catch { /* ignore */ }
         setStatus('error');
         setError(parsed.needsPassword ? d.errWithPassword : d.errNoPassword);

@@ -15,6 +15,14 @@ skip() { SKIP+=("$1"); echo "⏭️  跳过：$1（$2）"; }
 step "① typecheck (tsc --noEmit)"
 if npm run -s typecheck; then ok "typecheck"; else bad "typecheck"; fi
 
+# ①b Electron 主进程/preload 类型检查
+step "①b typecheck:electron (tsc -p tsconfig.electron.json)"
+if npm run -s typecheck:electron; then ok "typecheck:electron"; else bad "typecheck:electron"; fi
+
+# ①c Lint
+step "①c lint (eslint)"
+if npm run -s lint; then ok "lint"; else bad "lint"; fi
+
 # ② 单元 + 集成测试（含 E2EHandshake）
 step "② 单元 + 集成测试 (jest)"
 if npm test --silent; then ok "jest"; else bad "jest"; fi

@@ -1,6 +1,6 @@
 import * as nacl from 'tweetnacl';
 import * as naclUtil from 'tweetnacl-util';
-import { IdentityManager, UserIdentity } from '../src/main/identity/IdentityManager';
+import { IdentityManager } from '../src/main/identity/IdentityManager';
 
 const KEY = 'test-encryption-key';
 
@@ -113,7 +113,7 @@ describe('IdentityManager', () => {
   });
 
   describe('对端身份导入与防伪', () => {
-    function makeForeignIdentity(nickname: string): {
+    function makeForeignIdentity(_nickname: string): {
       userId: string;
       publicKey: string;
       secretKey: Uint8Array;
@@ -127,7 +127,7 @@ describe('IdentityManager', () => {
         nacl.sign.detached(boxKp.publicKey, signKp.secretKey)
       );
       // 用真实的 generateUserId 算法计算（Base58(SHA-256(publicKey)[:16])）
-      const tempMgr = new IdentityManager(KEY + '-other');
+      const _tempMgr = new IdentityManager(KEY + '-other');
       // 通过 verifyUserId 反推预期 userId：直接用 mgr 计算
       // 实际上 generateUserId 是私有方法 — 我们换种方式：试错枚举不现实，
       // 直接通过 verifyUserId 校验来确保我们手算正确。

@@ -18,8 +18,7 @@ import {
 } from '@mui/material';
 import {
   CheckCircle as CheckIcon,
-  Error as ErrorIcon,
-  Info as InfoIcon
+  Error as ErrorIcon
 } from '@mui/icons-material';
 
 interface CustomIdSetupProps {
@@ -375,4 +374,4 @@ export const CustomIdSetup: React.FC<CustomIdSetupProps> = ({
       </Box>
     </Paper>
   );
-}; 
+};
