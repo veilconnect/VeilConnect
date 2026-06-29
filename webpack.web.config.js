@@ -89,7 +89,11 @@ module.exports = (env, argv) => {
         // 托管版(Cloudflare Pages 静态,无 /blob 后端)设 VC_BLOB_ENABLED=0 隐藏入口,
         // 待 R2 就绪后设 VC_BLOB_BASE=https://signal.veilconnect.org 指向 Worker 即可启用。
         __VC_BLOB_ENABLED__: JSON.stringify(process.env.VC_BLOB_ENABLED !== '0'),
-        __VC_BLOB_BASE__: JSON.stringify(process.env.VC_BLOB_BASE || '')
+        __VC_BLOB_BASE__: JSON.stringify(process.env.VC_BLOB_BASE || ''),
+        // 商业化控制面默认关闭。未显式设置 VC_COMMERCIAL_ENABLED=1 时，不请求控制面、
+        // 不改变现有托管/自部署行为，也不会被 scripts/deploy-pages.sh 启用。
+        __VC_COMMERCIAL_ENABLED__: JSON.stringify(process.env.VC_COMMERCIAL_ENABLED === '1'),
+        __VC_COMMERCIAL_CONTROL_BASE__: JSON.stringify(process.env.VC_COMMERCIAL_CONTROL_BASE || '')
       }),
       new webpack.ProvidePlugin({
         Buffer: ['buffer', 'Buffer'],

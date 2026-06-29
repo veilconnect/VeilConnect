@@ -6,6 +6,9 @@
 #   # 设置 TURN 机密（Cloudflare 控制台 Realtime/Calls → TURN 拿 KEY_ID / API_TOKEN）：
 #   wrangler secret put TURN_KEY_ID
 #   wrangler secret put TURN_API_TOKEN
+#   wrangler secret put IP_HASH_SECRET
+#   wrangler secret put ROOM_TOKEN_HASH_SECRET
+#   wrangler secret put METRICS_READ_TOKEN
 #   # 绑定自定义域（控制台 Workers → 你的 worker → Triggers → Custom Domains）：signal.veilconnect.org
 #
 # 本地联调：wrangler dev --port 8787   （DO 在本地 workerd 中运行，可端到端测试）
@@ -29,7 +32,7 @@ bindings = [
 binding = "BLOB"
 bucket_name = "veilconnect-blob"
 
-# SQLite-backed DO（new_sqlite_classes）以兼容 Cloudflare 免费套餐（本 DO 不落存储，仅用内存中继）。
+# SQLite-backed DO（new_sqlite_classes）以兼容 Cloudflare 免费套餐；中继连接只在内存中，持久化房间仅落 room_meta。
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SignalingRoom"]
@@ -44,3 +47,6 @@ TURN_TTL = "86400"
 BLOB_MAX_MB = "95"
 BLOB_TTL_H = "24"
 # TURN_KEY_ID / TURN_API_TOKEN 用 `wrangler secret put` 设置，勿写入此文件。
+# METRICS_READ_TOKEN 用于读取 GET /metrics，未设置时该接口默认返回 404。
+# IP_HASH_SECRET 用于把客户端 IP 转成不可逆限流指纹；未设置时每个 DO 实例使用内存临时盐。
+# ROOM_TOKEN_HASH_SECRET 用于持久化房间 token 摘要；未设置时复用 IP_HASH_SECRET，仍未设置则退回 sha256。

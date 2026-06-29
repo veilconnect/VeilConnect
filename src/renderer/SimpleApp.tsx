@@ -14,9 +14,11 @@ interface UserIdentity {
 
 interface SimpleAppProps {
   onReady?: (identity: UserIdentity) => void;
+  productName?: string;
+  primaryColor?: string;
 }
 
-const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
+const SimpleApp: React.FC<SimpleAppProps> = ({ onReady, productName, primaryColor }) => {
   const { t, currentLanguage, changeLanguage, supportedLanguages } = useTranslation();
   const [userIdentity, setUserIdentity] = useState<UserIdentity | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -174,6 +176,9 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
     console.log('🗑️ 身份已清除');
   };
 
+  const brandName = productName || t.appTitle;
+  const brandColor = primaryColor || '#667eea';
+
   const styles = {
     container: {
       fontFamily: 'Arial, sans-serif',
@@ -183,7 +188,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
       padding: 0
     },
     header: {
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      background: `linear-gradient(135deg, ${brandColor} 0%, #202938 100%)`,
       color: 'white',
       padding: '1rem 2rem',
       boxShadow: '0 4px 20px rgba(102, 126, 234, 0.3)'
@@ -220,7 +225,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
       borderRadius: '8px',
       border: 'none',
       cursor: 'pointer',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      background: `linear-gradient(135deg, ${brandColor} 0%, #202938 100%)`,
       color: 'white',
       transition: 'all 0.2s ease'
     },
@@ -228,9 +233,9 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
       padding: '8px 16px',
       fontSize: '1rem',
       borderRadius: '6px',
-      border: '2px solid #667eea',
+      border: `2px solid ${brandColor}`,
       backgroundColor: 'transparent',
-      color: '#667eea',
+      color: brandColor,
       cursor: 'pointer'
     },
     featureBox: {
@@ -245,7 +250,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
   return (
     <div style={styles.container}>
       <header style={{ ...styles.header, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h1 style={styles.title}>🛡️ {t.appTitle} — {t.appSubtitle}</h1>
+        <h1 style={styles.title}>🛡️ {brandName} — {t.appSubtitle}</h1>
         <select
           value={currentLanguage}
           onChange={(e) => changeLanguage(e.target.value)}
@@ -275,7 +280,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
 
         {!userIdentity ? (
           <div style={styles.card}>
-            <h2 style={{ color: '#667eea', marginBottom: '1rem' }}>
+            <h2 style={{ color: brandColor, marginBottom: '1rem' }}>
               🛡️ {t.welcome.title}
             </h2>
 
@@ -302,7 +307,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
             </button>
 
             <div style={styles.featureBox}>
-              <h4 style={{ color: '#667eea', marginBottom: '1rem' }}>
+              <h4 style={{ color: brandColor, marginBottom: '1rem' }}>
                 {t.welcome.features.title}
               </h4>
               <div>
@@ -316,7 +321,7 @@ const SimpleApp: React.FC<SimpleAppProps> = ({ onReady }) => {
           </div>
         ) : (
           <div style={styles.card}>
-            <h2 style={{ color: '#667eea' }}>{t.completion.title}</h2>
+            <h2 style={{ color: brandColor }}>{t.completion.title}</h2>
             <div style={{ margin: '2rem 0', textAlign: 'start' }}>
               <p><strong>{t.identity.userId}</strong> {userIdentity.publicId}</p>
               <p><strong>{t.identity.nickname}</strong> {userIdentity.nickname}</p>

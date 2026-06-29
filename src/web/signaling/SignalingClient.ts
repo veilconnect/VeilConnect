@@ -20,6 +20,8 @@ export interface SignalingHandlers {
   onClose?: () => void;
 }
 
+export type RoomMode = 'ephemeral' | 'persistent';
+
 // 构建期注入（webpack DefinePlugin）：托管版指向独立信令 Worker；自部署版为空 → 回退同源。
 declare const __VC_SIGNALING_URL__: string | undefined;
 
@@ -165,9 +167,12 @@ export class SignalingClient {
     });
   }
 
-  join(roomId: string, token: string, maxClients?: number): void {
-    // maxClients 仅房主（首个加入者）设置生效；服务器据此锁定房间人数上限。
-    this.send({ type: 'join_room', roomId, token, maxClients });
+  join(roomId: string, token: string, maxClients?: number, persistent = false): void {
+    // maxClients / persistent 仅首个加入者设置生效；服务器据此锁定房间人数上限与生命周期。
+    const msg: any = { type: 'join_room', roomId, token };
+    if (Number.isInteger(maxClients)) msg.maxClients = maxClients;
+    if (persistent) msg.persistent = true;
+    this.send(msg);
   }
 
   sendSignal(data: any): void {

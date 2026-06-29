@@ -1,0 +1,11 @@
+{$DOMAIN} {
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+  }
+
+  reverse_proxy veilconnect:8446
+}

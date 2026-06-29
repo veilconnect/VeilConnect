@@ -11,23 +11,48 @@
  */
 
 const WebSocket = require('ws');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const SignalingServer = require('./signaling-server');
 
 // 测试用 origin 必须在默认白名单内，否则 verifyClient 会 403
 const ORIGIN = 'http://localhost:8080';
 const VALID_TOKEN = 'super-secret-token-1234'; // >= 16 chars
+const METRICS_TOKEN = 'test-metrics-token-1234';
+const IP_HASH_SECRET = 'test-ip-hash-secret-1234';
 
 let server;
 let port;
+let savedMetricsReadToken;
+let savedIpHashSecret;
+let savedPersistentRoomStore;
+let persistentRoomStoreDir;
 
 /** 启动服务器并返回实际监听端口 */
 function startServer() {
     return new Promise((resolve) => {
+        savedMetricsReadToken = process.env.METRICS_READ_TOKEN;
+        savedIpHashSecret = process.env.SIGNAL_IP_HASH_SECRET;
+        savedPersistentRoomStore = process.env.PERSISTENT_ROOM_STORE;
+        persistentRoomStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), 'veilconnect-rooms-'));
+        process.env.METRICS_READ_TOKEN = METRICS_TOKEN;
+        process.env.SIGNAL_IP_HASH_SECRET = IP_HASH_SECRET;
+        process.env.PERSISTENT_ROOM_STORE = path.join(persistentRoomStoreDir, 'rooms.json');
         const s = new SignalingServer(0); // 端口 0 = 由系统分配空闲端口
         s.server.listen(0, () => {
             resolve({ s, port: s.server.address().port });
         });
     });
+}
+
+function restoreEnv(name, value) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+}
+
+function metricsHeaders(token = METRICS_TOKEN) {
+    return { origin: ORIGIN, authorization: `Bearer ${token}` };
 }
 
 /**
@@ -84,6 +109,18 @@ function closeSocket(ws) {
     });
 }
 
+function waitFor(predicate, timeout = 1500) {
+    return new Promise((resolve, reject) => {
+        const started = Date.now();
+        const tick = () => {
+            if (predicate()) return resolve();
+            if (Date.now() - started > timeout) return reject(new Error('timeout waiting for condition'));
+            setTimeout(tick, 25);
+        };
+        tick();
+    });
+}
+
 beforeAll(async () => {
     const started = await startServer();
     server = started.s;
@@ -92,6 +129,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
     if (server) server.stop();
+    restoreEnv('METRICS_READ_TOKEN', savedMetricsReadToken);
+    restoreEnv('SIGNAL_IP_HASH_SECRET', savedIpHashSecret);
+    restoreEnv('PERSISTENT_ROOM_STORE', savedPersistentRoomStore);
+    if (persistentRoomStoreDir) fs.rmSync(persistentRoomStoreDir, { recursive: true, force: true });
     // 给 server.close 回调一点时间
     await new Promise((r) => setTimeout(r, 100));
 });
@@ -104,6 +145,7 @@ describe('SignalingServer 安全加固', () => {
         sockets = [];
         server.rateBuckets.clear();
         server.failedJoinBuckets.clear();
+        server.rooms.clear();
     });
 
     test('两个相同 token 的客户端可加入同房并互相中继 signal', async () => {
@@ -129,6 +171,51 @@ describe('SignalingServer 安全加固', () => {
         a.send(JSON.stringify({ type: 'signal', data: { type: 'offer', sdp: 'x' } }));
         const relayed = await bGetsSignal;
         expect(relayed.data).toEqual({ type: 'offer', sdp: 'x' });
+    });
+
+    test('一次性房间无人后删除，持久化房间无人后保留入口', async () => {
+        const ephemeralRoom = 'roomEphemeral';
+        const a = await connect();
+        sockets.push(a);
+        await nextMessage(a, (m) => m.type === 'welcome');
+        a.send(JSON.stringify({ type: 'join_room', roomId: ephemeralRoom, token: VALID_TOKEN }));
+        await nextMessage(a, (m) => m.type === 'room_joined');
+        expect(server.rooms.has(ephemeralRoom)).toBe(true);
+
+        await closeSocket(a);
+        await waitFor(() => !server.rooms.has(ephemeralRoom));
+
+        const persistentRoom = 'roomPersistent';
+        const b = await connect();
+        sockets.push(b);
+        await nextMessage(b, (m) => m.type === 'welcome');
+        b.send(JSON.stringify({ type: 'join_room', roomId: persistentRoom, token: VALID_TOKEN, persistent: true, maxClients: 2 }));
+        const bJoined = await nextMessage(b, (m) => m.type === 'room_joined');
+        expect(bJoined.clientCount).toBe(1);
+        expect(server.rooms.get(persistentRoom).persistent).toBe(true);
+
+        await closeSocket(b);
+        await waitFor(() => server.rooms.has(persistentRoom) && server.rooms.get(persistentRoom).clients.size === 0);
+        expect(server.rooms.get(persistentRoom).tokenHash).toMatch(/^[a-f0-9]{64}$/);
+
+        const saved = JSON.parse(fs.readFileSync(process.env.PERSISTENT_ROOM_STORE, 'utf8'));
+        expect(saved.rooms[persistentRoom]).toMatchObject({ persistent: true, maxClients: 2 });
+        expect(JSON.stringify(saved)).not.toContain('client_');
+        expect(JSON.stringify(saved)).not.toContain('127.0.0.1');
+
+        const c = await connect();
+        sockets.push(c);
+        await nextMessage(c, (m) => m.type === 'welcome');
+        c.send(JSON.stringify({ type: 'join_room', roomId: persistentRoom, token: VALID_TOKEN }));
+        const cJoined = await nextMessage(c, (m) => m.type === 'room_joined');
+        expect(cJoined.clientCount).toBe(1);
+
+        const d = await connect();
+        sockets.push(d);
+        await nextMessage(d, (m) => m.type === 'welcome');
+        d.send(JSON.stringify({ type: 'join_room', roomId: persistentRoom, token: 'wrong-token-abcdef' }));
+        const err = await nextMessage(d, (m) => m.type === 'error');
+        expect(err.error).toBe('Invalid room token');
     });
 
     test('错误 token 的第二个客户端被拒绝（Invalid room token）', async () => {
@@ -177,17 +264,34 @@ describe('SignalingServer 安全加固', () => {
         }
     });
 
-    test('匿名配对计数：POST /metrics/pair 自增，GET /metrics 读回总数与按天，不记任何标识', async () => {
-        const before = await (await fetch(`http://localhost:${port}/metrics`, { headers: { origin: ORIGIN } })).json();
+    test('匿名配对计数：POST /metrics/pair 自增，GET /metrics 需管理令牌且不记任何标识', async () => {
+        const denied = await fetch(`http://localhost:${port}/metrics`, { headers: { origin: ORIGIN } });
+        expect(denied.status).toBe(404);
+
+        const before = await (await fetch(`http://localhost:${port}/metrics`, { headers: metricsHeaders() })).json();
         const r = await fetch(`http://localhost:${port}/metrics/pair`, { method: 'POST', headers: { origin: ORIGIN } });
         const body = await r.json();
         expect(body.ok).toBe(true);
-        const after = await (await fetch(`http://localhost:${port}/metrics`, { headers: { origin: ORIGIN } })).json();
+        const after = await (await fetch(`http://localhost:${port}/metrics`, { headers: metricsHeaders() })).json();
         expect(after.total).toBe((before.total || 0) + 1);
         // 仅聚合字段，无任何逐事件/IP/房间记录
         expect(Object.keys(after).sort()).toEqual(['days', 'total']);
         const day = new Date().toISOString().slice(0, 10);
         expect(after.days[day]).toBeGreaterThanOrEqual(1);
+    });
+
+    test('连接状态只保留 IP 指纹，不保留明文 IP / User-Agent / 加入时间', async () => {
+        const a = await connect();
+        sockets.push(a);
+        const welcome = await nextMessage(a, (m) => m.type === 'welcome');
+        const clientInfo = [...server.clients.values()].find((c) => c.id === welcome.clientId);
+
+        expect(clientInfo).toBeTruthy();
+        expect(clientInfo.ip).toBeUndefined();
+        expect(clientInfo.userAgent).toBeUndefined();
+        expect(clientInfo.joinedAt).toBeUndefined();
+        expect(clientInfo.ipFingerprint).toMatch(/^[a-f0-9]{64}$/);
+        expect(clientInfo.ipFingerprint).not.toContain('127.0.0.1');
     });
 
     test('CSP connect-src 收敛：含 self/wss/ws，但不含宽松的裸 https:（防注入脚本外传明文）', async () => {
@@ -230,6 +334,15 @@ describe('SignalingServer 安全加固', () => {
             server.trustProxyHops = 2;
             expect(server.clientIp(fakeReq('1.1.1.1, 203.0.113.9, 172.16.0.1'))).toBe('203.0.113.9');
         });
+    });
+
+    test('clientFingerprint 对同一 IP 稳定，且不会暴露原始地址', () => {
+        const req = { headers: {}, socket: { remoteAddress: '198.51.100.77' } };
+        const a = server.clientFingerprint(req);
+        const b = server.clientFingerprint(req);
+        expect(a).toBe(b);
+        expect(a).toMatch(/^[a-f0-9]{64}$/);
+        expect(a).not.toContain('198.51.100.77');
     });
 
     test('同一连接/IP 多次失败 join 后被限速', async () => {

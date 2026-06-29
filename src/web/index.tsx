@@ -12,6 +12,11 @@ import { installElectronAPI, isKeyStoreInitialized, unlock, resetKeyStore } from
 import DownloadView from './blob/DownloadView';
 import { parseShareHash } from './blob/blobTransfer';
 import { gateStrings, resolveGateLang, isRtlLang } from './gateI18n';
+import {
+  PublicCommercialConfig,
+  applyCommercialBrandingToDocument,
+  loadCommercialConfigForHost
+} from '../commercial/client';
 
 // 异步文件下载链接(#dl=..&k=..):独立下载页,无需身份/口令/Worker,优先于一切。
 const isDownloadLink = typeof location !== 'undefined' && !!parseShareHash(location.hash);
@@ -32,6 +37,7 @@ const UnlockGate: React.FC = () => {
   const [error, setError] = useState('');
   const [unlocked, setUnlocked] = useState(false);
   const [showPw, setShowPw] = useState(false);
+  const [commercialConfig, setCommercialConfig] = useState<PublicCommercialConfig | null>(null);
   // 门禁页在 i18n React 应用挂载前运行，独立解析语言并设置文字方向（RTL）。
   const [lang] = useState(resolveGateLang);
   const g = gateStrings(lang);
@@ -42,6 +48,19 @@ const UnlockGate: React.FC = () => {
       document.documentElement.dir = isRtlLang(lang) ? 'rtl' : 'ltr';
     }
   }, [lang]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof location === 'undefined') return;
+    void loadCommercialConfigForHost(location.hostname)
+      .then(config => {
+        if (cancelled) return;
+        setCommercialConfig(config);
+        applyCommercialBrandingToDocument(config);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (isDesktop) return; // 桌面端不走口令门禁，避免无谓启动网页 Worker
@@ -87,7 +106,10 @@ const UnlockGate: React.FC = () => {
     }
   };
 
-  if (isDesktop || unlocked) return <VeilConnectApp />;
+  if (isDesktop || unlocked) return <VeilConnectApp commercialConfig={commercialConfig} />;
+
+  const productName = commercialConfig?.active ? commercialConfig.branding.productName : 'VeilConnect';
+  const primaryColor = commercialConfig?.active ? commercialConfig.branding.primaryColor : '#667eea';
 
   return (
     <div
@@ -96,7 +118,7 @@ const UnlockGate: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        background: `linear-gradient(135deg, ${primaryColor} 0%, #202938 100%)`,
         fontFamily: 'system-ui, sans-serif'
       }}
     >
@@ -110,7 +132,7 @@ const UnlockGate: React.FC = () => {
           boxShadow: '0 12px 40px rgba(0,0,0,0.25)'
         }}
       >
-        <h2 style={{ margin: '0 0 6px', color: '#333' }}>🔒 VeilConnect</h2>
+        <h2 style={{ margin: '0 0 6px', color: '#333' }}>🔒 {productName}</h2>
         <p style={{ margin: '0 0 20px', color: '#666', fontSize: 14 }}>
           {initialized === null
             ? g.loading
@@ -147,7 +169,7 @@ const UnlockGate: React.FC = () => {
 
         {error && <div style={{ color: '#d32f2f', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 
-        <button type="submit" disabled={busy || initialized === null} style={buttonStyle}>
+        <button type="submit" disabled={busy || initialized === null} style={{ ...buttonStyle, background: `linear-gradient(135deg, ${primaryColor}, #202938)` }}>
           {busy ? g.processing : initialized ? g.unlockBtn : g.createBtn}
         </button>
 
@@ -166,7 +188,7 @@ const UnlockGate: React.FC = () => {
           {g.privacyNote}
         </p>
         <p style={{ margin: '12px 0 0', textAlign: 'center', fontSize: 12 }}>
-          <a href="/download" style={{ color: '#667eea', textDecoration: 'none' }}>{g.learnMore}</a>
+          <a href="/download" style={{ color: primaryColor, textDecoration: 'none' }}>{g.learnMore}</a>
         </p>
       </form>
     </div>

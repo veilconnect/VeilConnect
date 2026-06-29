@@ -57,4 +57,29 @@ describe('SignalingClient', () => {
       timestamp: expect.any(Number)
     });
   });
+
+  it('sends persistent flag only when requested', async () => {
+    const client = new SignalingClient({}, 'ws://127.0.0.1:3001');
+    const connected = client.connect();
+    const ws = MockWebSocket.instances[0];
+
+    ws.receive({ type: 'welcome', clientId: 'client-a' });
+    await connected;
+
+    client.join('room-a', 'super-secret-token-1234', 2, true);
+    client.join('room-b', 'super-secret-token-5678');
+
+    expect(JSON.parse(ws.sent[0])).toEqual({
+      type: 'join_room',
+      roomId: 'room-a',
+      token: 'super-secret-token-1234',
+      maxClients: 2,
+      persistent: true
+    });
+    expect(JSON.parse(ws.sent[1])).toEqual({
+      type: 'join_room',
+      roomId: 'room-b',
+      token: 'super-secret-token-5678'
+    });
+  });
 });

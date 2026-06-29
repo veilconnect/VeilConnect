@@ -39,6 +39,19 @@ else
   skip "signaling" "server/node_modules 缺 ws（cd server && npm i）"
 fi
 
+# ②c 信令 Worker DO 持久化测试（vitest-pool-workers / 真实 workerd）：
+# 确定性覆盖「持久化房间落盘 + 驱逐后冷启动 loadRoomMeta 恢复锁」——线上无法按需触发 DO 驱逐。
+step "②c 信令 Worker DO 持久化 (vitest-pool-workers)"
+if [ -d infra/cloudflare/signaling/node_modules/@cloudflare/vitest-pool-workers ]; then
+  if (cd infra/cloudflare/signaling && npx vitest run >/tmp/vc-do-test.log 2>&1); then
+    ok "DO 持久化 (落盘/冷加载/WS)"
+  else
+    bad "DO 持久化"; echo "  --- DO 测试日志尾部 ---"; tail -10 /tmp/vc-do-test.log 2>/dev/null
+  fi
+else
+  skip "DO 持久化" "infra/cloudflare/signaling/node_modules 缺（cd infra/cloudflare/signaling && npm i）"
+fi
+
 # ③ 生产构建
 step "③ 生产构建 (webpack)"
 if npm run -s build; then ok "build"; else bad "build"; fi

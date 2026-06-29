@@ -1,11 +1,12 @@
 /** 从链接或裸 hash 解析房间参数：支持完整 URL（含 #room=..&t=..）或纯 'room=..&t=..'。 */
-export function parseRoomLink(input: string): { roomId: string; token: string } | null {
+export function parseRoomLink(input: string): { roomId: string; token: string; persistent: boolean } | null {
   try {
     const hash = input.includes('#') ? input.slice(input.indexOf('#') + 1) : input;
     const params = new URLSearchParams(hash);
     const roomId = params.get('room');
     const token = params.get('t');
-    if (roomId && token) return { roomId, token };
+    const mode = params.get('m') || params.get('mode');
+    if (roomId && token) return { roomId, token, persistent: mode === 'p' || mode === 'persistent' };
   } catch { /* ignore */ }
   return null;
 }

@@ -121,13 +121,15 @@ ALLOWED_ORIGINS="http://localhost:3001" PORT=3001 npm run serve
 | 项 | 说明 |
 |---|---|
 | Origin 白名单 | `ALLOWED_ORIGINS` 环境变量，逗号分隔；不在名单内 → HTTP 403 |
-| 房间 Token | join_room 必须提供 16-128 字符 token；首位加入者锁定 token，后续以 SHA-256 摘要做**常量时间**比对 |
-| 失败 join 限速 | 每 IP 60s 内最多 10 次失败 join（防房间 token 暴力枚举） |
-| 连接限速 | 每 IP 60s 内最多 30 次 WS 连接 |
+| 房间 Token | join_room 必须提供 16-128 字符 token；首位加入者锁定 token，后续以 token 摘要做**常量时间**比对；配置 `ROOM_TOKEN_HASH_SECRET` 后使用 HMAC 摘要 |
+| 房间生命周期 | 默认一次性：无人后删除房间入口；持久化房间只保留 roomId/token 摘要/容量，同一链接或房间号可复用，服务器仍不保存聊天内容 |
+| 失败 join 限速 | 每 IP 指纹 60s 内最多 10 次失败 join（防房间 token 暴力枚举；应用状态不保存明文 IP） |
+| 连接限速 | 每 IP 指纹 60s 内最多 30 次 WS 连接 |
 | 消息体积上限 | WS payload 64KB / HTTP body 64KB |
 | 房间容量 | 默认 4 人 |
 | 心跳超时 | 90s 未活跃自动断开 |
-| 反代真实 IP | 跑在 Caddy/Nginx 反代之后须设 `TRUST_PROXY=代理跳数`（本栈 docker-compose 已默认 `=1`），按 `X-Forwarded-For` 倒数第 N 段取真实客户端 IP。**不设则上面所有「每 IP」限流会退化为全局阈值**（少量连接即触顶、防 token 爆破失效）；直连裸跑时保持 0 以免信任伪造的 XFF |
+| 反代真实 IP | 跑在 Caddy/Nginx 反代之后须设 `TRUST_PROXY=代理跳数`（本栈 docker-compose 已默认 `=1`），按 `X-Forwarded-For` 倒数第 N 段取真实客户端 IP 后立即用 `SIGNAL_IP_HASH_SECRET` 生成 HMAC 指纹。**不设则上面所有「每 IP 指纹」限流会退化为全局阈值**（少量连接即触顶、防 token 爆破失效）；直连裸跑时保持 0 以免信任伪造的 XFF |
+| 统计读取 | `POST /metrics/pair` 仍是空信标；`GET /metrics` 需要 `Authorization: Bearer $METRICS_READ_TOKEN`，未配置或未授权时返回 404 |
 
 ---
 
@@ -179,8 +181,8 @@ cipher = AES-256-GCM(JSON.stringify(identity), key, iv)
 - **子资源完整性（SRI）**：`npm run build:web` 后自动给下发脚本注入 `integrity="sha384-…"` 并生成 `server/public/sri-manifest.json`；浏览器拒绝执行哈希不符的脚本。CI 用 `npm run sri:check` 强制校验。
 - **可复现构建**：`npm ci` + 精确钉死的密码学依赖，可字节级复现并比对官方哈希。详见 [`docs/REPRODUCIBLE_BUILD.md`](docs/REPRODUCIBLE_BUILD.md)。
 - **威胁模型（STRIDE）**：逐角色/逐类别列出能与不能，并指向对应测试断言。详见 [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md)、[`docs/security/CRYPTO_RATIONALE.md`](docs/security/CRYPTO_RATIONALE.md)。
-- **信令隐私默认**：信令服务器默认**不记录**任何元数据（IP/clientId/roomId）；排障才设 `SIGNAL_VERBOSE=1`。
-- **CI 门禁**：`.github/workflows/ci.yml` 跑 typecheck + Electron typecheck + ESLint + 304 测试 + 构建 + SRI 校验 + 服务端测试 + 生产依赖审计。
+- **信令隐私默认**：信令服务器默认**不记录**任何元数据（clientId/roomId/消息类型）；明文 IP 只在请求边界用于生成不可逆限流指纹，不进入连接状态；排障才设 `SIGNAL_VERBOSE=1`。
+- **CI 门禁**：`.github/workflows/ci.yml` 跑 typecheck + Electron typecheck + ESLint + 335 测试 + 构建 + SRI 校验 + 服务端测试 + 生产依赖审计。
 
 ---
 
@@ -188,8 +190,8 @@ cipher = AES-256-GCM(JSON.stringify(identity), key, iv)
 
 ```
 $ npm test
-Test Suites: 21 passed, 21 total
-Tests:       304 passed, 304 total
+Test Suites: 31 passed, 31 total
+Tests:       335 passed, 335 total
 
 File                       | % Stmts | % Branch | % Funcs | % Lines
 All files                  |   85.77 |    64.65 |   86.55 |   87.55
@@ -201,7 +203,7 @@ All files                  |   85.77 |    64.65 |   86.55 |   87.55
 ```
 
 > 信令服务器的安全加固测试（房间 token、失败 join 限速、反代真实 IP 解析、限速桶清理）单独跑（依赖 `server/node_modules`）：
-> `npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js"` → 12 passed。
+> `npx jest server/signaling-server.test.js --roots ./server --testMatch "**/*.test.js"` → 14 passed。
 
 关键的安全断言（不仅是 happy path）：
 

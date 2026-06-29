@@ -16,7 +16,7 @@
 #       → 用本机 LAN IP + Caddy 内置 CA 自签证书（免域名/免备案）。
 #         浏览器首次访问点「信任/继续」即可。默认走 8080/8443 端口，避开既有 80/443 服务。
 #
-# 可选环境变量：EXTERNAL_IP、BIND_IP、TURN_SECRET、HTTP_PORT、HTTPS_PORT、TURN_TRANSPORT
+# 可选环境变量：EXTERNAL_IP、BIND_IP、TURN_SECRET、HTTP_PORT、HTTPS_PORT、TURN_TRANSPORT、SIGNAL_IP_HASH_SECRET、ROOM_TOKEN_HASH_SECRET、METRICS_READ_TOKEN
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -123,12 +123,30 @@ fi
 if [ "$HTTPS_PORT" = "443" ]; then PUBLIC_ORIGIN="https://$DOMAIN"; else PUBLIC_ORIGIN="https://$DOMAIN:$HTTPS_PORT"; fi
 c_green "✓ 模式：$MODE · 域名/地址：$DOMAIN · 端口：${HTTP_PORT}/${HTTPS_PORT} · 监听：$BIND_IP · 出口IP：$EXTERNAL_IP"
 
-# --- 4. 生成 / 复用 .env（幂等：保留已有 TURN_SECRET） ---
+# --- 4. 生成 / 复用 .env（幂等：保留已有 TURN_SECRET / 信令隐私密钥 / 房间摘要密钥） ---
 TURN_SECRET="$(env_default TURN_SECRET)"
 if [ -n "$TURN_SECRET" ]; then
   c_blue "→ 复用已有 .env 中的 TURN_SECRET"
 else
   TURN_SECRET="$(openssl rand -hex 32)"
+fi
+SIGNAL_IP_HASH_SECRET="$(env_default SIGNAL_IP_HASH_SECRET)"
+if [ -n "$SIGNAL_IP_HASH_SECRET" ]; then
+  c_blue "→ 复用已有 .env 中的 SIGNAL_IP_HASH_SECRET"
+else
+  SIGNAL_IP_HASH_SECRET="$(openssl rand -hex 32)"
+fi
+ROOM_TOKEN_HASH_SECRET="$(env_default ROOM_TOKEN_HASH_SECRET)"
+if [ -n "$ROOM_TOKEN_HASH_SECRET" ]; then
+  c_blue "→ 复用已有 .env 中的 ROOM_TOKEN_HASH_SECRET"
+else
+  ROOM_TOKEN_HASH_SECRET="$(openssl rand -hex 32)"
+fi
+METRICS_READ_TOKEN="$(env_default METRICS_READ_TOKEN)"
+if [ -n "$METRICS_READ_TOKEN" ]; then
+  c_blue "→ 复用已有 .env 中的 METRICS_READ_TOKEN"
+else
+  METRICS_READ_TOKEN="$(openssl rand -hex 32)"
 fi
 # coturn 中继 SSRF 加固：仅公网模式禁止中继到环回/私网/链路本地/CGNAT，
 # 防 network_mode:host 下 coturn 被当作打内网的跳板。local/LAN 模式必须留空，
@@ -143,6 +161,10 @@ DOMAIN=$DOMAIN
 EXTERNAL_IP=$EXTERNAL_IP
 BIND_IP=$BIND_IP
 TURN_SECRET=$TURN_SECRET
+SIGNAL_IP_HASH_SECRET=$SIGNAL_IP_HASH_SECRET
+ROOM_TOKEN_HASH_SECRET=$ROOM_TOKEN_HASH_SECRET
+PERSISTENT_ROOM_STORE=/data/persistent-rooms.json
+METRICS_READ_TOKEN=$METRICS_READ_TOKEN
 HTTP_PORT=$HTTP_PORT
 HTTPS_PORT=$HTTPS_PORT
 CADDYFILE=$CADDYFILE
@@ -150,7 +172,7 @@ PUBLIC_ORIGIN=$PUBLIC_ORIGIN
 TURN_TRANSPORT=$TURN_TRANSPORT
 TURN_EXTRA_ARGS=$TURN_EXTRA_ARGS
 EOF
-chmod 600 "$ROOT/.env"   # 含 TURN_SECRET，限制为属主可读写
+chmod 600 "$ROOT/.env"   # 含 TURN_SECRET / 信令隐私密钥，限制为属主可读写
 c_green "✓ 已写入 .env（chmod 600）"
 
 # --- 5. 防火墙（仅在 ufw active 时操作） ---

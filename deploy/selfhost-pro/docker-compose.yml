@@ -1,0 +1,44 @@
+services:
+  veilconnect:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      SIGNAL_VERBOSE: ${SIGNAL_VERBOSE:-0}
+      SIGNAL_IP_HASH_SECRET: ${SIGNAL_IP_HASH_SECRET}
+      ROOM_TOKEN_HASH_SECRET: ${ROOM_TOKEN_HASH_SECRET:-}
+      PERSISTENT_ROOM_STORE: ${PERSISTENT_ROOM_STORE:-/data/persistent-rooms.json}
+      METRICS_READ_TOKEN: ${METRICS_READ_TOKEN:-}
+      BLOB_DIR: /data/blobs
+      BLOB_MAX_MB: ${BLOB_MAX_MB:-95}
+      BLOB_TTL_H: ${BLOB_TTL_H:-24}
+      TURN_STATIC_URL: ${TURN_STATIC_URL:-}
+      TURN_STATIC_USERNAME: ${TURN_STATIC_USERNAME:-}
+      TURN_STATIC_CREDENTIAL: ${TURN_STATIC_CREDENTIAL:-}
+      VEILCONNECT_LICENSE_PATH: ${VEILCONNECT_LICENSE_PATH:-}
+    expose:
+      - "8446"
+    volumes:
+      - app_data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - veilconnect
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:

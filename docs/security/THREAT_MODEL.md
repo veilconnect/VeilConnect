@@ -11,14 +11,14 @@
 | Ed25519 身份私钥 | 浏览器 IndexedDB（口令派生密钥加密） | PBKDF2-SHA256 60万轮 + AES-256-GCM；仅在加密 Web Worker 内解密使用 |
 | X25519 加密私钥 | 同上 | 同上；私钥永不出 Worker（`toRendererIdentity` 剥离 secretKey） |
 | 消息明文 | 仅两端内存（默认）/可选 IndexedDB（开 `vc.persist`） | Double Ratchet 每消息密钥；持久化时 per-store 密钥 AES 加密 |
-| 房间 token | 一次性，URL fragment | `crypto.getRandomValues`；服务端 SHA-256 + 常量时间比对 |
+| 房间 token | 一次性或持久化入口，URL fragment | `crypto.getRandomValues`；服务端 token 摘要 + 常量时间比对；持久化房间只保存 roomId/token 摘要/容量，不保存聊天内容 |
 
 ## 信任边界与各角色能力
 
 ### 1. 信令服务器（被视为不可信中继）
-- **能**：看到 WS 连接的来源 IP、房间内有几个连接、转发不透明的 SDP/ICE。
+- **能**：在网络/边缘层看到 WS 连接来源 IP、房间内有几个连接、转发不透明的 SDP/ICE。
 - **不能**：读取消息内容（端到端加密）；冒充对端而不被 SAS 发现（替换身份公钥会改变安全码，带外核对即暴露）；枚举房间 token（失败 join 限速 + 常量时间比对，见 server 测试）。
-- **缓解**：默认不记录元数据日志（`SIGNAL_VERBOSE` 关闭时不落 IP/clientId/roomId）。
+- **缓解**：默认不记录元数据日志（`SIGNAL_VERBOSE` 关闭时不落 clientId/roomId/消息类型）；应用层只把 IP 转成 HMAC 指纹用于限流，不在连接状态/限流桶保存明文 IP；`GET /metrics` 需要管理令牌。
 
 ### 2. TURN 中继
 - **能**：看到双方 relay 流量的存在与时序、双方公网出口（中继侧）。
@@ -44,11 +44,11 @@
 | | 篡改下发脚本 | **部分** | SRI + manifest（部署者仍是根信任，见角色 3） |
 | **R**epudiation 抵赖 | — | 不在范围 | 设计上不做不可抵赖性（反而利于否认性） |
 | **I**nfo Disclosure 泄露 | 读取消息内容 | 缓解 | E2EE + 前向保密 |
-| | 元数据（谁/何时/IP） | **残留** | 中继可见连接事件；默认不记日志但无法消除。高威胁场景叠加 VPN/Tor |
+| | 元数据（谁/何时/IP） | **残留** | 中继/边缘/运营商可见连接事件；应用层不保存明文 IP 但无法消除网络可见性。高威胁场景叠加 VPN/Tor |
 | | 私钥落盘 | 缓解 | 口令加密；弱于桌面 OS keychain（已披露） |
-| **D**oS | token 爆破 | 缓解 | 失败 join 限速（每 IP 60s/10 次） |
-| | 连接洪泛 | 缓解 | 每 IP 60s/30 连接；WS/HTTP 体积 64KB 上限；心跳清理 |
-| | TURN 盗刷 | 缓解 | `/turn-credentials` 每 IP 限速 + 时限凭据 |
+| **D**oS | token 爆破 | 缓解 | 失败 join 限速（每 IP 指纹 60s/10 次） |
+| | 连接洪泛 | 缓解 | 每 IP 指纹 60s/30 连接；WS/HTTP 体积 64KB 上限；心跳清理 |
+| | TURN 盗刷 | 缓解 | `/turn-credentials` 每 IP 指纹限速 + 时限凭据 |
 | **E**oP 提权 | XSS 注入 | 缓解 | CSP `script-src 'self'`、`nosniff`；私钥在 Worker 软隔离 |
 | | XFF 伪造抬高信任 | 缓解 | `TRUST_PROXY` 取 XFF 倒数第 N 段（见 server 测试） |
 

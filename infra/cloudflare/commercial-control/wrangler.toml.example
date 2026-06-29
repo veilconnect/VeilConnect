@@ -1,0 +1,25 @@
+# Example only. This control plane is intentionally not referenced by the
+# existing deploy scripts and should not be deployed until commercial features
+# are ready to launch.
+
+name = "veilconnect-commercial-control"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+
+[vars]
+COMMERCIAL_CONTROL_ENABLED = "0"
+ALLOWED_ORIGINS = "https://veilconnect.org,https://www.veilconnect.org"
+STRIPE_PRICE_HOSTED_PRO = ""
+STRIPE_PRICE_HOSTED_TEAM = ""
+STRIPE_PRICE_SELF_HOST_PRO = ""
+
+# Create a separate D1 database and apply schema.sql before enabling this.
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "veilconnect-commercial"
+# database_id = "replace-me"
+
+# Set through Wrangler secrets when billing is implemented:
+# ADMIN_API_TOKEN
+# STRIPE_SECRET_KEY
+# STRIPE_WEBHOOK_SECRET

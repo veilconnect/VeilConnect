@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from '../i18n/useTranslation';
-import { SignalingClient, generateRoomCredentials, deriveRoomCredentials, isValidRoomCode, normalizeRoomCode } from '../../web/signaling/SignalingClient';
+import { SignalingClient, generateRoomCredentials, deriveRoomCredentials, isValidRoomCode, normalizeRoomCode, RoomMode } from '../../web/signaling/SignalingClient';
 import {
   ChunkAssembler,
   DEFAULT_CHUNK_SIZE,
@@ -73,10 +73,12 @@ interface SimpleP2PChatProps {
     publicKey: string;
     privateKey: string;
   };
+  productName?: string;
+  primaryColor?: string;
 }
 
-export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) => {
-  const { t } = useTranslation();
+export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity, productName, primaryColor }) => {
+  const { t, currentLanguage } = useTranslation();
   // WebRTC状态
   const [pc, setPc] = useState<RTCPeerConnection | null>(null);
   const [dc, setDc] = useState<RTCDataChannel | null>(null);
@@ -97,6 +99,8 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const [showRoomCodeDialog, setShowRoomCodeDialog] = useState(false);
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [sharedRoomCode, setSharedRoomCode] = useState(''); // host 创建后展示给对方的房间号
+  const [roomMode, setRoomMode] = useState<RoomMode>('ephemeral');
+  const [activeRoomMode, setActiveRoomMode] = useState<RoomMode>('ephemeral');
 
   // 端到端加密 / 身份验证状态
   const [secureStatus, setSecureStatus] = useState<SecureStatus>('idle');
@@ -1109,7 +1113,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
    * 经信令房间建立 P2P 连接。host 在对端入房后发 offer，guest 收到 offer 后回 answer，
    * 双方 trickle ICE。DataChannel 打开后，既有的 hello/cipher/SAS 握手原样接管（与传输方式无关）。
    */
-  const beginSession = useCallback(async (asHost: boolean, roomId: string, token: string, maxClients?: number) => {
+  const beginSession = useCallback(async (asHost: boolean, roomId: string, token: string, maxClients?: number, persistent = false) => {
     // 等待 ICE 配置（relayOnly / TURN）就绪，避免用到默认/空配置
     await iceReadyRef.current?.promise;
 
@@ -1198,6 +1202,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           setConnectionStatus('disconnected');
           setRoomLink('');
           setSharedRoomCode('');
+          setActiveRoomMode('ephemeral');
           setShowRoomDialog(false);
           resetSecureState();
           clearFileTransferState();
@@ -1211,7 +1216,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       if (iceWarningRef.current) log(iceWarningRef.current, 'WARN');
       await signaling.connect(roomId); // 传 roomId 以便 Cloudflare 信令 Worker 路由到房间 DO
       // 仅房主把人数上限发给服务器锁定；访客不传（也无法放宽房主设定）。
-      signaling.join(roomId, token, asHost ? maxClients : undefined);
+      signaling.join(roomId, token, asHost ? maxClients : undefined, persistent);
       log(asHost ? t.chat.p2p.roomReadyWaiting : t.chat.p2p.joinedConnecting);
       dev(`joined room ${roomId}`);
     } catch (err) {
@@ -1243,7 +1248,9 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const createRoom = useCallback(async () => {
     const { roomId, token } = generateRoomCredentials();
     const base = `${location.origin}${location.pathname}`;
-    setRoomLink(`${base}#room=${roomId}&t=${token}`);
+    const persistent = roomMode === 'persistent';
+    setActiveRoomMode(roomMode);
+    setRoomLink(`${base}#room=${roomId}&t=${token}${persistent ? '&m=p' : ''}`);
     setShowRoomDialog(true);
     // host 启用配对码：生成高熵码并锁定本会话走配对验证（hello 会带 pairing 标志通知对端）。
     if (usePairing) {
@@ -1254,14 +1261,15 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       setPairingCode(code);
     }
     // 严格一对一：房间人数上限锁定为 2（满员后服务器拒绝其他人加入）
-    await beginSession(true, roomId, token, 2);
-  }, [beginSession, usePairing]);
+    await beginSession(true, roomId, token, 2, persistent);
+  }, [beginSession, roomMode, usePairing]);
 
   // guest：用房间参数加入
-  const joinRoom = useCallback(async (roomId: string, token: string) => {
+  const joinRoom = useCallback(async (roomId: string, token: string, persistent = false) => {
     setShowJoinDialog(false);
     setInputCode('');
-    await beginSession(false, roomId, token);
+    setActiveRoomMode(persistent ? 'persistent' : 'ephemeral');
+    await beginSession(false, roomId, token, undefined, persistent);
   }, [beginSession]);
 
   // guest：手动粘贴房间链接加入。可选预填配对码 → 本地声明持有，立即锁定 fail-closed，
@@ -1280,7 +1288,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       setPairRequired(true);
       setJoinPairInput('');
     }
-    await joinRoom(parsed.roomId, parsed.token);
+    await joinRoom(parsed.roomId, parsed.token, parsed.persistent);
   }, [inputCode, joinPairInput, joinRoom, log, t.chat.p2p.invalidRoomLink, t.chat.p2p.pairMissingCode]);
 
   // 自定义房间号：host 先开房（确定性派生 roomId/token），把短号码告诉对方。
@@ -1288,13 +1296,15 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     const norm = normalizeRoomCode(roomCodeInput);
     if (!isValidRoomCode(norm)) { log(t.chat.p2p.roomCodeTooShort, 'WARN'); return; }
     const { roomId, token } = await deriveRoomCredentials(norm);
+    const persistent = roomMode === 'persistent';
+    setActiveRoomMode(roomMode);
     setSharedRoomCode(norm);
     setRoomLink('');                 // 房间号模式不展示长链接
     setShowRoomCodeDialog(false);
     setRoomCodeInput('');
     setShowRoomDialog(true);         // 复用房间面板展示「房间号」与状态
-    await beginSession(true, roomId, token, 2);
-  }, [roomCodeInput, beginSession, log, t.chat.p2p.roomCodeTooShort]);
+    await beginSession(true, roomId, token, 2, persistent);
+  }, [roomCodeInput, roomMode, beginSession, log, t.chat.p2p.roomCodeTooShort]);
 
   // 自定义房间号：guest 用同一个号码加入（派生出与 host 相同的 roomId/token）。
   const joinRoomByCode = useCallback(async () => {
@@ -1303,6 +1313,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     const { roomId, token } = await deriveRoomCredentials(norm);
     setShowRoomCodeDialog(false);
     setRoomCodeInput('');
+    setActiveRoomMode('ephemeral');
     await beginSession(false, roomId, token);
   }, [roomCodeInput, beginSession, log, t.chat.p2p.roomCodeTooShort]);
 
@@ -1311,7 +1322,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     const parsed = parseRoomLink(location.hash);
     if (!parsed) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ }
-    void joinRoom(parsed.roomId, parsed.token);
+    void joinRoom(parsed.roomId, parsed.token, parsed.persistent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1492,6 +1503,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     setConnectionStatus('disconnected');
     setRoomLink('');
     setSharedRoomCode('');
+    setActiveRoomMode('ephemeral');
     setShowRoomDialog(false);
     setShowRoomCodeDialog(false);
     // 彻底清除配对码会话设置（resetSecureState 故意保留它以便重连，断开时才清）
@@ -1572,6 +1584,29 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
   const fileTransferBusy = fileTransfers.some(item => item.status === 'sending' || item.status === 'receiving');
   const myUserId = selfIdentityRef.current?.userId || userIdentity?.customId || '';
   const myIdentityLabel = formatIdentityLabel(t.chat.p2p.mePrefix, myName, myUserId);
+  const brandColor = primaryColor || '#667eea';
+  const zh = currentLanguage.toLowerCase().startsWith('zh');
+  const roomModeCopy = zh ? {
+    label: '房间模式',
+    ephemeral: '一次性',
+    ephemeralTitle: '无人后删除房间入口；适合临时沟通。',
+    persistent: '持久化',
+    persistentTitle: '无人后仍保留房间入口；同一链接或房间号可复用。',
+    badgeEphemeral: '一次性房间',
+    badgePersistent: '持久化房间',
+    persistentWarning: '持久化只保留房间入口，不保存聊天内容。持有链接/房间号和口令的人以后仍可进入，请谨慎分享。',
+    ephemeralWarning: '链接含一次性房间口令，请通过可信渠道发送。连接建立后，请核对安全码/配对码。'
+  } : {
+    label: 'Room mode',
+    ephemeral: 'One-time',
+    ephemeralTitle: 'Deletes the room entry when everyone leaves; best for temporary chats.',
+    persistent: 'Persistent',
+    persistentTitle: 'Keeps the room entry after everyone leaves; the same link or room code can be reused.',
+    badgeEphemeral: 'One-time room',
+    badgePersistent: 'Persistent room',
+    persistentWarning: 'Persistence keeps only the room entry, not chat content. Anyone with the link/room code and token can enter later, so share carefully.',
+    ephemeralWarning: 'The link contains a one-time room token; send it over a trusted channel. Verify the safety/pairing code after connecting.'
+  };
 
   const styles = {
     container: {
@@ -1581,7 +1616,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       fontFamily: 'system-ui, -apple-system, sans-serif'
     },
     header: {
-      background: 'linear-gradient(135deg, #667eea, #764ba2)',
+      background: `linear-gradient(135deg, ${brandColor}, #202938)`,
       color: 'white',
       padding: '15px 20px',
       display: 'flex',
@@ -1633,14 +1668,36 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       background: '#f8f9fa',
       borderBottom: '1px solid #e9ecef',
       display: 'flex',
+      alignItems: 'center',
       gap: '10px',
       flexWrap: 'wrap' as const
+    },
+    roomModeGroup: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 0,
+      border: '1px solid #d7dde5',
+      borderRadius: 6,
+      overflow: 'hidden',
+      background: 'white'
+    },
+    roomModeBtn: {
+      minWidth: 72,
+      height: 34,
+      padding: '0 10px',
+      border: 'none',
+      borderInlineEnd: '1px solid #d7dde5',
+      background: 'white',
+      color: '#4d5a66',
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: 600
     },
     btn: {
       padding: '8px 16px',
       border: 'none',
       borderRadius: '6px',
-      background: '#667eea',
+      background: brandColor,
       color: 'white',
       cursor: 'pointer',
       fontSize: '14px',
@@ -1648,10 +1705,10 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
     },
     btnSecondary: {
       padding: '8px 16px',
-      border: '2px solid #667eea',
+      border: `2px solid ${brandColor}`,
       borderRadius: '6px',
       background: 'white',
-      color: '#667eea',
+      color: brandColor,
       cursor: 'pointer',
       fontSize: '14px',
       fontWeight: '600'
@@ -1814,7 +1871,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       {/* 头部：标题 + 本机身份 + 连接/加密状态 + 关于 */}
       <div style={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
-          <h3 style={{ margin: 0 }}>{t.chat.p2p.headerTitle}</h3>
+          <h3 style={{ margin: 0 }}>{productName || t.chat.p2p.headerTitle}</h3>
           <span
             style={{ fontSize: 12, opacity: 0.9, cursor: 'pointer', overflowWrap: 'anywhere' }}
             onClick={renameSelf}
@@ -1931,6 +1988,39 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
           {t.chat.p2p.createRoomBtn}
         </button>
         <span style={{ fontSize: 12, color: '#888' }}>{t.chat.p2p.oneToOneNote}</span>
+        <div style={styles.roomModeGroup} role="group" aria-label={roomModeCopy.label}>
+          <button
+            type="button"
+            style={{
+              ...styles.roomModeBtn,
+              background: roomMode === 'ephemeral' ? brandColor : 'white',
+              color: roomMode === 'ephemeral' ? 'white' : '#4d5a66',
+              cursor: connectionStatus === 'disconnected' ? 'pointer' : 'not-allowed',
+              opacity: connectionStatus === 'disconnected' ? 1 : 0.65
+            }}
+            disabled={connectionStatus !== 'disconnected'}
+            title={roomModeCopy.ephemeralTitle}
+            onClick={() => setRoomMode('ephemeral')}
+          >
+            {roomModeCopy.ephemeral}
+          </button>
+          <button
+            type="button"
+            style={{
+              ...styles.roomModeBtn,
+              borderInlineEnd: 'none',
+              background: roomMode === 'persistent' ? brandColor : 'white',
+              color: roomMode === 'persistent' ? 'white' : '#4d5a66',
+              cursor: connectionStatus === 'disconnected' ? 'pointer' : 'not-allowed',
+              opacity: connectionStatus === 'disconnected' ? 1 : 0.65
+            }}
+            disabled={connectionStatus !== 'disconnected'}
+            title={roomModeCopy.persistentTitle}
+            onClick={() => setRoomMode('persistent')}
+          >
+            {roomModeCopy.persistent}
+          </button>
+        </div>
         <label style={{ fontSize: 12, color: '#555', display: 'inline-flex', alignItems: 'center', gap: 5, cursor: connectionStatus === 'disconnected' ? 'pointer' : 'not-allowed' }}>
           <input
             type="checkbox"
@@ -1993,8 +2083,13 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
       {/* 房间分享（host）：内联卡片，全部在同一页面内完成；连接建立后(connected)自动消失，无弹窗。 */}
       {(roomLink || sharedRoomCode) && showRoomDialog && connectionStatus !== 'connected' && (
         <div style={{ padding: '12px', background: '#eef6ff', borderTop: '1px solid #cfe3fb' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-            <strong>{t.chat.p2p.roomCreatedHeading}</strong>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <strong>{t.chat.p2p.roomCreatedHeading}</strong>
+              <span style={{ fontSize: 11, fontWeight: 700, color: activeRoomMode === 'persistent' ? '#8a5a00' : '#2c5fa4', background: activeRoomMode === 'persistent' ? '#fff3cd' : '#e7f0ff', border: '1px solid #d8e6fb', borderRadius: 999, padding: '2px 8px' }}>
+                {activeRoomMode === 'persistent' ? roomModeCopy.badgePersistent : roomModeCopy.badgeEphemeral}
+              </span>
+            </div>
             <span style={{ fontSize: 12, color: connectionStatus === 'connecting' ? '#f39c12' : '#3498db' }}>
               {connectionStatus === 'connecting' ? t.chat.p2p.establishingEncrypted : t.chat.p2p.waitingPeerJoin}
             </span>
@@ -2009,6 +2104,11 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
               <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
                 {t.chat.p2p.roomCodeShareHint}
               </p>
+              {activeRoomMode === 'persistent' && (
+                <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
+                  {roomModeCopy.persistentWarning}
+                </p>
+              )}
             </>
           ) : (
             <>
@@ -2020,7 +2120,7 @@ export const SimpleP2PChat: React.FC<SimpleP2PChatProps> = ({ userIdentity }) =>
                 onFocus={(e) => e.currentTarget.select()}
               />
               <p style={{ fontSize: 12, color: '#856404', background: '#fff3cd', padding: '6px 10px', borderRadius: 6, margin: '6px 0' }}>
-                {t.chat.p2p.roomLinkWarning}
+                {activeRoomMode === 'persistent' ? roomModeCopy.persistentWarning : roomModeCopy.ephemeralWarning}
               </p>
             </>
           )}

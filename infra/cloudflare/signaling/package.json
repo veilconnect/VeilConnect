@@ -1,0 +1,16 @@
+{
+  "name": "veilconnect-signaling",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "VeilConnect 信令 Worker（房间 Durable Object + TURN 凭据签发）",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.20",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.94.0"
+  }
+}

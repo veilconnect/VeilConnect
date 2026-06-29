@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import SimpleApp from './SimpleApp';
 import { SimpleP2PChat } from './components/SimpleP2PChat';
 import { I18nProvider } from './i18n/I18nProvider';
+import type { PublicCommercialConfig } from '../commercial/client';
 
 interface Identity {
   publicKey: string;
@@ -13,8 +14,13 @@ interface Identity {
   sessionId: string;
 }
 
-const VeilConnectApp: React.FC = () => {
+interface VeilConnectAppProps {
+  commercialConfig?: PublicCommercialConfig | null;
+}
+
+const VeilConnectApp: React.FC<VeilConnectAppProps> = ({ commercialConfig = null }) => {
   const [identity, setIdentity] = useState<Identity | null>(null);
+  const branding = commercialConfig?.active ? commercialConfig.branding : null;
 
   useEffect(() => {
     (async () => {
@@ -42,6 +48,8 @@ const VeilConnectApp: React.FC = () => {
         {identity ? (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#f5f7fa' }}>
             <SimpleP2PChat
+              productName={branding?.productName}
+              primaryColor={branding?.primaryColor}
               userIdentity={{
                 customId: identity.publicId,
                 nickname: identity.nickname,
@@ -51,7 +59,11 @@ const VeilConnectApp: React.FC = () => {
             />
           </div>
         ) : (
-          <SimpleApp onReady={handleReady} />
+          <SimpleApp
+            onReady={handleReady}
+            productName={branding?.productName}
+            primaryColor={branding?.primaryColor}
+          />
         )}
       </div>
     </I18nProvider>

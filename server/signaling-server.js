@@ -9,6 +9,7 @@ const express = require('express');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const path = require('path');
 const cors = require('cors');
@@ -47,10 +48,10 @@ class SignalingServer {
             verifyClient: (info, cb) => this.verifyClient(info, cb)
         });
 
-        this.rooms = new Map();        // roomId -> { clients:Set, tokenHash:string }
+        this.rooms = new Map();        // roomId -> { clients:Set, tokenHash:string, maxClients:number, persistent:boolean }
         this.clients = new Map();      // websocket -> clientInfo
-        this.rateBuckets = new Map();  // ip -> { count, windowStart }
-        this.failedJoinBuckets = new Map(); // ip -> { count, windowStart } 失败 join 限速
+        this.rateBuckets = new Map();  // ipFingerprint -> { count, windowStart }
+        this.failedJoinBuckets = new Map(); // ipFingerprint -> { count, windowStart } 失败 join 限速
 
         this.allowedOrigins = (process.env.ALLOWED_ORIGINS
             ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
@@ -63,9 +64,12 @@ class SignalingServer {
         // 故倒数第 1 段是 Caddy 亲自写入的真实客户端地址，无法被客户端伪造（客户端伪造的内容只会出现在更靠左的位置）。
         this.trustProxyHops = parseInt(process.env.TRUST_PROXY || '0', 10) || 0;
 
-        // 隐私默认：默认【不】记录任何含元数据（客户端 IP / clientId / roomId / 消息类型）的日志，
+        // 隐私默认：默认【不】记录任何含元数据（clientId / roomId / 消息类型）的日志，
         // 以免信令服务器变成「谁在何时与谁连接」的旁路元数据库。运维排障可设 SIGNAL_VERBOSE=1 开启。
         this.verbose = process.env.SIGNAL_VERBOSE === '1';
+        this.ipHashSecret = process.env.SIGNAL_IP_HASH_SECRET || crypto.randomBytes(32).toString('hex');
+        this.roomTokenHashSecret = process.env.ROOM_TOKEN_HASH_SECRET || process.env.SIGNAL_IP_HASH_SECRET || null;
+        this.metricsReadToken = process.env.METRICS_READ_TOKEN || null;
 
         // —— 异步文件 blob 暂存（网盘式:链接即密钥;服务器只存【密文】,无密钥解不开)——
         // 默认开启;BLOB_STORE=off 关闭(回到"服务器零存储")。BLOB_DIR 默认 server/blobs;
@@ -77,9 +81,15 @@ class SignalingServer {
         this.blobs = new Map(); // id -> { size, expiresAt }
         if (this.blobEnabled) this.initBlobStore();
 
+        // 持久化房间注册表：仅保存 roomId -> token 摘要 / 容量 / 生命周期，不保存消息、IP、clientId。
+        // 默认放在 blobDir 旁，便于自部署通过同一个数据卷保留。
+        this.persistentRoomStorePath = process.env.PERSISTENT_ROOM_STORE || path.join(this.blobDir, 'persistent-rooms.json');
+
         // 匿名使用计数（一次成功配对 = +1）：仅一个全局总数 + 按天总数，绝不记 IP/身份/房间/内容。
         // 内存态——自部署进程重启即归零（可接受;运维想长期留存可自行落库）。
         this.pairMetric = { total: 0, days: {} };
+
+        this.loadPersistentRooms();
 
         this.setupMiddleware();
         this.setupRoutes();
@@ -89,10 +99,10 @@ class SignalingServer {
         console.log('🚀 VeilConnect 信令服务器初始化完成');
         console.log(`🔐 Allowed origins: ${this.allowedOrigins.join(', ')}`);
         console.log(`🔀 Trust proxy hops: ${this.trustProxyHops}${this.trustProxyHops === 0 ? ' (直接暴露；若在反代后请设 TRUST_PROXY=代理跳数)' : ''}`);
-        console.log(`🕵️  Verbose metadata logging: ${this.verbose ? 'ON (含 IP/clientId，排障用)' : 'OFF (隐私默认，不记录元数据)'}`);
+        console.log(`🕵️  Verbose metadata logging: ${this.verbose ? 'ON (含 clientId/roomId，排障用；不含明文 IP)' : 'OFF (隐私默认，不记录元数据)'}`);
     }
 
-    /** 仅在 SIGNAL_VERBOSE=1 时输出含元数据的日志（IP / clientId / roomId / 消息类型）。 */
+    /** 仅在 SIGNAL_VERBOSE=1 时输出含元数据的日志（clientId / roomId / 消息类型，不含明文 IP）。 */
     vlog(...args) {
         if (this.verbose) console.log(...args);
     }
@@ -138,6 +148,25 @@ class SignalingServer {
         return (req && req.socket && req.socket.remoteAddress) || 'unknown';
     }
 
+    clientFingerprint(req) {
+        return crypto.createHmac('sha256', this.ipHashSecret).update(this.clientIp(req)).digest('hex');
+    }
+
+    bearerToken(req) {
+        const value = (req && req.headers && req.headers.authorization) || '';
+        const match = String(value).match(/^Bearer\s+(.+)$/i);
+        return match ? match[1] : '';
+    }
+
+    tokenMatches(provided, expected) {
+        if (!expected || typeof provided !== 'string' || provided.length !== expected.length) return false;
+        return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    }
+
+    canReadMetrics(req) {
+        return this.tokenMatches(this.bearerToken(req), this.metricsReadToken);
+    }
+
     isOriginAllowed(origin) {
         if (!origin) return false;
         return this.allowedOrigins.includes('*') || this.allowedOrigins.includes(origin);
@@ -145,46 +174,46 @@ class SignalingServer {
 
     verifyClient(info, cb) {
         const origin = info.origin || info.req.headers.origin;
-        const remoteIp = this.clientIp(info.req);
 
         if (!this.isOriginAllowed(origin)) {
-            this.vlog(`🚫 拒绝连接（origin 不在白名单）: ${origin} from ${remoteIp}`);
+            this.vlog(`🚫 拒绝连接（origin 不在白名单）: ${origin}`);
             return cb(false, 403, 'Origin not allowed');
         }
 
-        if (!this.checkRateLimit(remoteIp)) {
-            this.vlog(`🚫 拒绝连接（限速）: ${remoteIp}`);
+        const clientFingerprint = this.clientFingerprint(info.req);
+        if (!this.checkRateLimit(clientFingerprint)) {
+            this.vlog(`🚫 拒绝连接（限速）: ${clientFingerprint.slice(0, 12)}`);
             return cb(false, 429, 'Too many connections');
         }
 
         cb(true);
     }
 
-    checkRateLimit(ip) {
+    checkRateLimit(identifier) {
         const now = Date.now();
-        const bucket = this.rateBuckets.get(ip);
+        const bucket = this.rateBuckets.get(identifier);
         if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
-            this.rateBuckets.set(ip, { count: 1, windowStart: now });
+            this.rateBuckets.set(identifier, { count: 1, windowStart: now });
             return true;
         }
         bucket.count++;
         return bucket.count <= CONNECTIONS_PER_IP_PER_MIN;
     }
 
-    // 检查该 IP 是否已被失败 join 限速（不增加计数）
-    isJoinThrottled(ip) {
+    // 检查该客户端指纹是否已被失败 join 限速（不增加计数）
+    isJoinThrottled(identifier) {
         const now = Date.now();
-        const bucket = this.failedJoinBuckets.get(ip);
+        const bucket = this.failedJoinBuckets.get(identifier);
         if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) return false;
         return bucket.count >= MAX_FAILED_JOINS_PER_IP_PER_MIN;
     }
 
     // 记录一次失败的 join 尝试
-    recordFailedJoin(ip) {
+    recordFailedJoin(identifier) {
         const now = Date.now();
-        const bucket = this.failedJoinBuckets.get(ip);
+        const bucket = this.failedJoinBuckets.get(identifier);
         if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
-            this.failedJoinBuckets.set(ip, { count: 1, windowStart: now });
+            this.failedJoinBuckets.set(identifier, { count: 1, windowStart: now });
             return;
         }
         bucket.count++;
@@ -201,17 +230,81 @@ class SignalingServer {
     }
 
     hashToken(token) {
-        return require('crypto').createHash('sha256').update(String(token)).digest('hex');
+        const value = String(token);
+        if (this.roomTokenHashSecret) {
+            return crypto.createHmac('sha256', this.roomTokenHashSecret).update(value).digest('hex');
+        }
+        return crypto.createHash('sha256').update(value).digest('hex');
     }
 
-    // 常量时间比较两个 sha256 十六进制摘要，避免计时侧信道
+    // 常量时间比较两个 token 十六进制摘要，避免计时侧信道
     tokenHashMatches(expectedHash, providedHash) {
-        const crypto = require('crypto');
         const a = Buffer.from(String(expectedHash), 'utf8');
         const b = Buffer.from(String(providedHash), 'utf8');
         // 先校验长度相等（timingSafeEqual 要求等长）；同为 sha256 hex 时恒等长
         if (a.length !== b.length) return false;
         return crypto.timingSafeEqual(a, b);
+    }
+
+    persistentRoomRecords() {
+        const rooms = {};
+        for (const [roomId, room] of this.rooms) {
+            if (!room || !room.persistent) continue;
+            rooms[roomId] = {
+                tokenHash: room.tokenHash,
+                maxClients: room.maxClients || 2,
+                persistent: true,
+                createdAt: room.createdAt || Date.now(),
+                updatedAt: room.updatedAt || Date.now()
+            };
+        }
+        return rooms;
+    }
+
+    loadPersistentRooms() {
+        try {
+            if (!this.persistentRoomStorePath || !fs.existsSync(this.persistentRoomStorePath)) return;
+            const raw = fs.readFileSync(this.persistentRoomStorePath, 'utf8');
+            const parsed = JSON.parse(raw);
+            const rooms = parsed && typeof parsed === 'object' ? parsed.rooms : null;
+            if (!rooms || typeof rooms !== 'object') return;
+
+            for (const [roomId, meta] of Object.entries(rooms)) {
+                if (typeof roomId !== 'string' || roomId.length < 4 || roomId.length > 128) continue;
+                if (!meta || typeof meta !== 'object') continue;
+                if (typeof meta.tokenHash !== 'string' || !/^[a-f0-9]{64}$/i.test(meta.tokenHash)) continue;
+                let cap = Number.isInteger(meta.maxClients) ? meta.maxClients : 2;
+                cap = Math.max(2, Math.min(MAX_ROOM_CLIENTS, cap));
+                this.rooms.set(roomId, {
+                    clients: new Set(),
+                    tokenHash: meta.tokenHash,
+                    maxClients: cap,
+                    persistent: true,
+                    createdAt: Number.isFinite(meta.createdAt) ? meta.createdAt : Date.now(),
+                    updatedAt: Number.isFinite(meta.updatedAt) ? meta.updatedAt : Date.now()
+                });
+            }
+        } catch (err) {
+            console.error('persistent room store load failed:', err.message);
+        }
+    }
+
+    savePersistentRooms() {
+        if (!this.persistentRoomStorePath) return;
+        try {
+            const dir = path.dirname(this.persistentRoomStorePath);
+            fs.mkdirSync(dir, { recursive: true });
+            const tmp = `${this.persistentRoomStorePath}.${process.pid}.tmp`;
+            const payload = {
+                version: 1,
+                updatedAt: Date.now(),
+                rooms: this.persistentRoomRecords()
+            };
+            fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), { mode: 0o600 });
+            fs.renameSync(tmp, this.persistentRoomStorePath);
+        } catch (err) {
+            console.error('persistent room store save failed:', err.message);
+        }
     }
     
     setupMiddleware() {
@@ -224,9 +317,12 @@ class SignalingServer {
             res.setHeader('Content-Security-Policy',
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
                 "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: ws:; " +
-                "worker-src 'self' blob:; base-uri 'self'; form-action 'self'");
+                "worker-src 'self' blob:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
+                "base-uri 'self'; form-action 'self'");
             res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('X-Frame-Options', 'DENY');
             res.setHeader('Referrer-Policy', 'no-referrer');
+            res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), accelerometer=(), gyroscope=(), magnetometer=()');
             next();
         });
 
@@ -243,7 +339,7 @@ class SignalingServer {
         this.app.use(cors({
             origin: (origin, callback) => callback(null, !origin || this.isOriginAllowed(origin)),
             methods: ['GET', 'POST'],
-            allowedHeaders: ['Content-Type']
+            allowedHeaders: ['Authorization', 'Content-Type']
         }));
 
         // JSON 解析 — 信令载荷 64KB 上限
@@ -278,9 +374,14 @@ class SignalingServer {
             this.pairMetric.days[day] = (this.pairMetric.days[day] || 0) + 1;
             const keys = Object.keys(this.pairMetric.days).sort();
             while (keys.length > 120) delete this.pairMetric.days[keys.shift()];
+            res.setHeader('Cache-Control', 'no-store');
             res.json({ ok: true, total: this.pairMetric.total });
         });
         this.app.get('/metrics', (req, res) => {
+            if (!this.canReadMetrics(req)) {
+                return res.status(404).json({ error: 'not found' });
+            }
+            res.setHeader('Cache-Control', 'no-store');
             res.json({ total: this.pairMetric.total, days: this.pairMetric.days });
         });
 
@@ -302,8 +403,8 @@ class SignalingServer {
         // 需环境变量 TURN_SECRET + TURN_HOST（与 coturn 的 static-auth-secret/realm 一致）。
         this.app.get('/turn-credentials', (req, res) => {
             // 每 IP 限速，缓解无鉴权端点被脚本反复拉取以盗刷 TURN 中继带宽
-            const ip = this.clientIp(req);
-            if (!this.checkRateLimit(ip)) {
+            const clientFingerprint = this.clientFingerprint(req);
+            if (!this.checkRateLimit(clientFingerprint)) {
                 return res.status(429).json({ error: 'Too many requests' });
             }
             const secret = process.env.TURN_SECRET;
@@ -312,12 +413,13 @@ class SignalingServer {
                 // 未配置 TURN 属预期状态（如本地联调），返回 200 + 空 iceServers + configured:false，
                 // 而非 503——避免浏览器控制台出现红色网络错误噪音。客户端据此不添加任何 TURN，
                 // 由前端安全守卫照常告警（仍不静默降级，relayOnly 仍默认开启）。
+                res.setHeader('Cache-Control', 'no-store');
                 return res.json({ iceServers: [], configured: false });
             }
             const ttl = parseInt(process.env.TURN_TTL || '3600', 10);
             const port = process.env.TURN_PORT || '3478';
             const username = String(Math.floor(Date.now() / 1000) + ttl);
-            const credential = require('crypto').createHmac('sha1', secret).update(username).digest('base64');
+            const credential = crypto.createHmac('sha1', secret).update(username).digest('base64');
             // TURN_TRANSPORT: both(默认) | tcp | udp。隧道(wg)环境下 TCP 中继比 UDP 更稳(避免 MTU/分片)。
             const transport = (process.env.TURN_TRANSPORT || 'both').toLowerCase();
             const urls = [];
@@ -326,6 +428,7 @@ class SignalingServer {
             if (process.env.TURNS_PORT) {
                 urls.push(`turns:${host}:${process.env.TURNS_PORT}?transport=tcp`);
             }
+            res.setHeader('Cache-Control', 'no-store');
             res.json({ iceServers: [{ urls, username, credential }], ttl });
         });
 
@@ -333,9 +436,9 @@ class SignalingServer {
         // 服务器只搬运密文,无密钥解不开;密钥在分享链接的 #片段里,绝不到服务器。
         if (this.blobEnabled) {
             this.app.post('/blob', (req, res) => {
-                const ip = this.clientIp(req);
-                if (!this.checkRateLimit(ip)) return res.status(429).json({ error: 'Too many requests' });
-                const id = require('crypto').randomBytes(16).toString('hex');
+                const clientFingerprint = this.clientFingerprint(req);
+                if (!this.checkRateLimit(clientFingerprint)) return res.status(429).json({ error: 'Too many requests' });
+                const id = crypto.randomBytes(16).toString('hex');
                 const tmp = path.join(this.blobDir, id + '.tmp');
                 const out = fs.createWriteStream(tmp);
                 let bytes = 0, aborted = false;
@@ -348,7 +451,7 @@ class SignalingServer {
                         catch { return res.status(500).json({ error: 'store failed' }); }
                         const expiresAt = Date.now() + this.blobTtlMs;
                         this.blobs.set(id, { size: bytes, expiresAt });
-                        this.vlog(`📦 blob 上传 ${id} (${bytes}B) from ${ip}`);
+                        this.vlog(`📦 blob 上传 ${id} (${bytes}B) from ${clientFingerprint.slice(0, 12)}`);
                         res.json({ id, size: bytes, expiresAt });
                     });
                 });
@@ -397,11 +500,9 @@ class SignalingServer {
             const clientInfo = {
                 id: clientId,
                 ws: ws,
-                joinedAt: new Date().toISOString(),
                 lastSeen: Date.now(),
                 roomId: null,
-                ip: this.clientIp(req),
-                userAgent: req.headers['user-agent'] || 'unknown'
+                ipFingerprint: this.clientFingerprint(req)
             };
             
             this.clients.set(ws, clientInfo);
@@ -456,7 +557,7 @@ class SignalingServer {
 
         switch (message.type) {
             case 'join_room':
-                this.handleJoinRoom(ws, message.roomId, message.token, message.maxClients);
+                this.handleJoinRoom(ws, message.roomId, message.token, message.maxClients, message.persistent === true);
                 break;
 
             case 'leave_room':
@@ -488,24 +589,24 @@ class SignalingServer {
         }
     }
     
-    handleJoinRoom(ws, roomId, token, maxClients) {
+    handleJoinRoom(ws, roomId, token, maxClients, persistent = false) {
         const client = this.clients.get(ws);
         if (!client) return;
 
-        const ip = client.ip || 'unknown';
+        const ipFingerprint = client.ipFingerprint || 'unknown';
 
         // 失败 join 限速：阻止暴力枚举房间 token
-        if (this.isJoinThrottled(ip)) {
-            this.vlog(`🚫 join_room 被限速（失败次数过多）: ${ip}`);
+        if (this.isJoinThrottled(ipFingerprint)) {
+            this.vlog(`🚫 join_room 被限速（失败次数过多）: ${ipFingerprint.slice(0, 12)}`);
             return this.sendMessage(ws, { type: 'error', error: 'Too many failed join attempts, try again later' });
         }
 
         if (typeof roomId !== 'string' || roomId.length < 4 || roomId.length > 128) {
-            this.recordFailedJoin(ip);
+            this.recordFailedJoin(ipFingerprint);
             return this.sendMessage(ws, { type: 'error', error: 'Invalid roomId' });
         }
         if (typeof token !== 'string' || token.length < 16 || token.length > 128) {
-            this.recordFailedJoin(ip);
+            this.recordFailedJoin(ipFingerprint);
             return this.sendMessage(ws, { type: 'error', error: 'Token required (16-128 chars)' });
         }
 
@@ -521,18 +622,30 @@ class SignalingServer {
             // 上限由房主指定，默认 2（严格一对一），并夹紧到 [2, MAX_ROOM_CLIENTS]。
             let cap = Number.isInteger(maxClients) ? maxClients : 2;
             cap = Math.max(2, Math.min(MAX_ROOM_CLIENTS, cap));
-            room = { clients: new Set(), tokenHash, maxClients: cap };
+            room = {
+                clients: new Set(),
+                tokenHash,
+                maxClients: cap,
+                persistent: persistent === true,
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            };
             this.rooms.set(roomId, room);
+            if (room.persistent) this.savePersistentRooms();
         } else if (!this.tokenHashMatches(room.tokenHash, tokenHash)) {
             this.vlog(`🚫 房间 token 不匹配: ${roomId}`);
-            this.recordFailedJoin(ip);
+            this.recordFailedJoin(ipFingerprint);
             return this.sendMessage(ws, { type: 'error', error: 'Invalid room token' });
+        } else if (persistent === true && !room.persistent) {
+            room.persistent = true;
+            room.updatedAt = Date.now();
+            this.savePersistentRooms();
         }
 
         // 人数上限以房主创建时锁定的值为准（后续加入者无法放宽）。
         const roomCap = room.maxClients || MAX_ROOM_CLIENTS;
         if (room.clients.size >= roomCap) {
-            this.recordFailedJoin(ip);
+            this.recordFailedJoin(ipFingerprint);
             return this.sendMessage(ws, { type: 'error', error: 'Room full' });
         }
 
@@ -574,8 +687,14 @@ class SignalingServer {
             }, ws);
 
             if (room.clients.size === 0) {
-                this.rooms.delete(client.roomId);
-                this.vlog(`🗑️ 房间 ${client.roomId} 已删除（无人）`);
+                if (room.persistent) {
+                    room.updatedAt = Date.now();
+                    this.savePersistentRooms();
+                    this.vlog(`📌 持久化房间 ${client.roomId} 已空置（保留入口）`);
+                } else {
+                    this.rooms.delete(client.roomId);
+                    this.vlog(`🗑️ 房间 ${client.roomId} 已删除（无人）`);
+                }
             }
         }
 

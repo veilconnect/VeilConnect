@@ -16,10 +16,23 @@ const MAX_ROOM_CLIENTS = 4;
 const MAX_MSG_BYTES = 64 * 1024;
 const RATE_WINDOW_MS = 60_000;   // 失败 join 限流窗口
 const MAX_FAILED_JOINS = 10;     // 每 IP 每窗口最多失败 join 次数（防 token 爆破，对齐 node 服务器）
+const encoder = new TextEncoder();
 
 async function sha256hex(s) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(s)));
+  const buf = await crypto.subtle.digest('SHA-256', encoder.encode(String(s)));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacSha256hex(secret, s) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(String(secret)),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(String(s)));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** 常量时间比较两个等长 hex 摘要（避免计时侧信道；同为 sha256 hex 时恒等长）。 */
@@ -34,33 +47,80 @@ export class SignalingRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.clients = new Map(); // ws -> { id, roomId, ip }
+    this.ipHashSecret = env?.IP_HASH_SECRET || crypto.randomUUID();
+    this.roomTokenHashSecret = env?.ROOM_TOKEN_HASH_SECRET || env?.IP_HASH_SECRET || null;
+    this.clients = new Map(); // ws -> { id, roomId, ipFingerprint }
     this.tokenHash = null;    // 首位加入者锁定
     this.maxClients = 2;
     this.roomId = null;
-    this.failedJoins = new Map(); // ip -> { count, windowStart }（不随房间清空而复位，避免断连即重置限流）
+    this.persistent = false;
+    this.createdAt = null;
+    this.updatedAt = null;
+    this.loadedRoomMeta = false;
+    this.failedJoins = new Map(); // ipFingerprint -> { count, windowStart }（不随房间清空而复位，避免断连即重置限流）
   }
 
-  // 该 IP 是否已被失败 join 限流（不增加计数）。
-  isJoinThrottled(ip) {
-    const b = this.failedJoins.get(ip);
+  async clientIpFingerprint(request) {
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    return sha256hex(`${this.ipHashSecret}:${ip}`);
+  }
+
+  async hashToken(token) {
+    if (this.roomTokenHashSecret) return hmacSha256hex(this.roomTokenHashSecret, token);
+    return sha256hex(token);
+  }
+
+  async loadRoomMeta() {
+    if (this.loadedRoomMeta) return;
+    this.loadedRoomMeta = true;
+    const meta = await this.state.storage.get('room_meta');
+    if (!meta || typeof meta !== 'object' || meta.persistent !== true) return;
+    if (typeof meta.tokenHash !== 'string' || !/^[a-f0-9]{64}$/i.test(meta.tokenHash)) return;
+    this.tokenHash = meta.tokenHash;
+    this.roomId = typeof meta.roomId === 'string' ? meta.roomId : null;
+    let cap = Number.isInteger(meta.maxClients) ? meta.maxClients : 2;
+    this.maxClients = Math.max(2, Math.min(MAX_ROOM_CLIENTS, cap));
+    this.persistent = true;
+    this.createdAt = Number.isFinite(meta.createdAt) ? meta.createdAt : Date.now();
+    this.updatedAt = Number.isFinite(meta.updatedAt) ? meta.updatedAt : Date.now();
+  }
+
+  async saveRoomMeta() {
+    if (!this.persistent || !this.tokenHash || !this.roomId) return;
+    const now = Date.now();
+    if (!this.createdAt) this.createdAt = now;
+    this.updatedAt = now;
+    await this.state.storage.put('room_meta', {
+      version: 1,
+      roomId: this.roomId,
+      tokenHash: this.tokenHash,
+      maxClients: this.maxClients,
+      persistent: true,
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt
+    });
+  }
+
+  // 该客户端 IP 指纹是否已被失败 join 限流（不增加计数）。
+  isJoinThrottled(ipFingerprint) {
+    const b = this.failedJoins.get(ipFingerprint);
     if (!b || Date.now() - b.windowStart > RATE_WINDOW_MS) return false;
     return b.count >= MAX_FAILED_JOINS;
   }
 
   // 清理过期的失败计数项（防止多 IP 攻击把 Map 撑大）。
   sweepFailedJoins(now) {
-    for (const [ip, b] of this.failedJoins) {
-      if (now - b.windowStart > RATE_WINDOW_MS) this.failedJoins.delete(ip);
+    for (const [ipFingerprint, b] of this.failedJoins) {
+      if (now - b.windowStart > RATE_WINDOW_MS) this.failedJoins.delete(ipFingerprint);
     }
   }
 
   // 记录一次失败的 join 尝试。
-  recordFailedJoin(ip) {
+  recordFailedJoin(ipFingerprint) {
     const now = Date.now();
     this.sweepFailedJoins(now);
-    const b = this.failedJoins.get(ip);
-    if (!b || now - b.windowStart > RATE_WINDOW_MS) { this.failedJoins.set(ip, { count: 1, windowStart: now }); return; }
+    const b = this.failedJoins.get(ipFingerprint);
+    if (!b || now - b.windowStart > RATE_WINDOW_MS) { this.failedJoins.set(ipFingerprint, { count: 1, windowStart: now }); return; }
     b.count++;
   }
 
@@ -99,8 +159,8 @@ export class SignalingRoom {
     const client = pair[0];
     const server = pair[1];
     server.accept();
-    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-    const info = { id: 'client_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12), roomId: null, ip };
+    const ipFingerprint = await this.clientIpFingerprint(request);
+    const info = { id: 'client_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12), roomId: null, ipFingerprint };
     this.clients.set(server, info);
     this.send(server, { type: 'welcome', clientId: info.id, timestamp: Date.now() });
 
@@ -131,23 +191,25 @@ export class SignalingRoom {
   }
 
   async join(ws, msg) {
+    await this.loadRoomMeta();
     const client = this.clients.get(ws);
     if (!client) return;
-    const ip = client.ip || 'unknown';
+    const ipFingerprint = client.ipFingerprint || 'unknown';
     // 失败 join 限流：防止已知 roomId 后对房间 token 不限速爆破（自定义房间号场景下尤其关键）。
-    if (this.isJoinThrottled(ip)) {
+    if (this.isJoinThrottled(ipFingerprint)) {
       return this.send(ws, { type: 'error', error: 'Too many failed join attempts, try again later' });
     }
     const { roomId, token, maxClients } = msg;
+    const wantsPersistent = msg.persistent === true;
     if (typeof roomId !== 'string' || roomId.length < 4 || roomId.length > 128) {
-      this.recordFailedJoin(ip);
+      this.recordFailedJoin(ipFingerprint);
       return this.send(ws, { type: 'error', error: 'Invalid roomId' });
     }
     if (typeof token !== 'string' || token.length < 16 || token.length > 128) {
-      this.recordFailedJoin(ip);
+      this.recordFailedJoin(ipFingerprint);
       return this.send(ws, { type: 'error', error: 'Token required (16-128 chars)' });
     }
-    const tokenHash = await sha256hex(token);
+    const tokenHash = await this.hashToken(token);
     if (this.tokenHash === null) {
       // 首位加入者（房主）锁定 token 与人数上限（夹紧到 [2, MAX_ROOM_CLIENTS]）。
       let cap = Number.isInteger(maxClients) ? maxClients : 2;
@@ -155,9 +217,16 @@ export class SignalingRoom {
       this.tokenHash = tokenHash;
       this.maxClients = cap;
       this.roomId = roomId;
+      this.persistent = wantsPersistent;
+      this.createdAt = Date.now();
+      if (this.persistent) await this.saveRoomMeta();
     } else if (!timingSafeEqualHex(this.tokenHash, tokenHash)) {
-      this.recordFailedJoin(ip);
+      this.recordFailedJoin(ipFingerprint);
       return this.send(ws, { type: 'error', error: 'Invalid room token' });
+    } else if (wantsPersistent && !this.persistent) {
+      this.persistent = true;
+      if (!this.roomId) this.roomId = roomId;
+      await this.saveRoomMeta();
     }
 
     const occupants = this.occupants();
@@ -167,7 +236,7 @@ export class SignalingRoom {
     }
     client.roomId = roomId;
     const count = occupants + 1;
-    this.send(ws, { type: 'room_joined', roomId, clientCount: count, timestamp: Date.now() });
+    this.send(ws, { type: 'room_joined', roomId, clientCount: count, persistent: this.persistent, timestamp: Date.now() });
     this.broadcast({ type: 'client_joined', clientId: client.id, clientCount: count, timestamp: Date.now() }, ws);
   }
 
@@ -177,12 +246,12 @@ export class SignalingRoom {
     this.broadcast({ type: 'signal', from: client.id, data: msg.data, timestamp: Date.now() }, ws);
   }
 
-  leave(ws) {
+  async leave(ws) {
     const client = this.clients.get(ws);
     if (!client || !client.roomId) return;
     client.roomId = null;
     this.broadcast({ type: 'client_left', clientId: client.id, clientCount: this.occupants(), timestamp: Date.now() }, ws);
-    this.maybeReset();
+    await this.maybeReset();
   }
 
   onClose(ws) {
@@ -191,12 +260,16 @@ export class SignalingRoom {
     if (client && client.roomId) {
       this.broadcast({ type: 'client_left', clientId: client.id, clientCount: this.occupants(), timestamp: Date.now() }, ws);
     }
-    this.maybeReset();
+    void this.maybeReset();
   }
 
-  /** 房间空了即复位 token/上限锁（对齐 node 服务器「无人即删房」，避免 token 长期被旧值锁死）。 */
-  maybeReset() {
+  /** 一次性房间空了即复位；持久化房间只刷新 room_meta，保留入口供后续复用。 */
+  async maybeReset() {
     if (this.occupants() === 0) {
+      if (this.persistent) {
+        await this.saveRoomMeta();
+        return;
+      }
       this.tokenHash = null;
       this.roomId = null;
       this.maxClients = 2;

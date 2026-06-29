@@ -11,7 +11,7 @@ http.server 的「HTTP 轮询」信令中继：客户端通过 POST /api/signal/
 (signaling-server.js) 保持同等安全模型，这里在 HTTP 层补齐以下控制：
   - Origin 白名单（ALLOWED_ORIGINS 可覆盖）
   - 房间 token 锁定（首个加入者锁定 sha256，后续常量时间比对）
-  - 每 IP 连接限速 + 失败 join 限速（内存桶，防 token 枚举）
+  - 每客户端 IP 指纹连接限速 + 失败 join 限速（内存桶，防 token 枚举）
   - 房间容量上限 + 请求体最大字节数（防超大帧）
   - HTTP 信息端点不泄漏房间存在性 / 内部 client id
 """
@@ -39,8 +39,8 @@ logging.basicConfig(
 DEFAULT_ALLOWED_ORIGINS = ['http://localhost:8080', 'http://127.0.0.1:8080', 'file://']
 MAX_BODY_BYTES = 64 * 1024            # 单次信令载荷上限 64KB，超出直接拒绝
 MAX_ROOM_CLIENTS = 4                  # 单房间最大客户端数
-CONNECTIONS_PER_IP_PER_MIN = 30       # 每 IP 每分钟最大请求(连接)数
-MAX_FAILED_JOINS_PER_IP_PER_MIN = 10  # 每 IP 每分钟最大失败 join 数（防 token 暴力枚举）
+CONNECTIONS_PER_IP_PER_MIN = 30       # 每 IP 指纹每分钟最大请求(连接)数
+MAX_FAILED_JOINS_PER_IP_PER_MIN = 10  # 每 IP 指纹每分钟最大失败 join 数（防 token 暴力枚举）
 RATE_WINDOW_MS = 60_000
 MIN_TOKEN_LEN = 16                    # token 最短长度
 MAX_TOKEN_LEN = 128
@@ -59,6 +59,8 @@ def _load_allowed_origins():
 
 
 ALLOWED_ORIGINS = _load_allowed_origins()
+IP_HASH_SECRET = os.environ.get('SIGNAL_IP_HASH_SECRET') or os.urandom(32).hex()
+ROOM_TOKEN_HASH_SECRET = os.environ.get('ROOM_TOKEN_HASH_SECRET') or os.environ.get('SIGNAL_IP_HASH_SECRET')
 
 
 def is_origin_allowed(origin):
@@ -71,8 +73,11 @@ def is_origin_allowed(origin):
 
 
 def hash_token(token):
-    """计算 token 的 sha256 十六进制摘要。"""
-    return hashlib.sha256(str(token).encode('utf-8')).hexdigest()
+    """计算 token 摘要；配置服务端密钥时用 HMAC，降低持久化注册表泄漏后的离线猜测风险。"""
+    raw = str(token).encode('utf-8')
+    if ROOM_TOKEN_HASH_SECRET:
+        return hmac.new(ROOM_TOKEN_HASH_SECRET.encode('utf-8'), raw, hashlib.sha256).hexdigest()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def token_hash_matches(expected_hash, provided_hash):
@@ -82,13 +87,13 @@ def token_hash_matches(expected_hash, provided_hash):
 
 class SignalingHandler(BaseHTTPRequestHandler):
     # 类变量，存储房间和消息
-    # roomId -> {'clients': set(), 'messages': [], 'token_hash': str}
+    # roomId -> {'clients': set(ipFingerprint), 'messages': [], 'token_hash': str, 'persistent': bool}
     rooms = {}
     room_lock = threading.Lock()
 
-    # ===== 内存限速桶（每 IP）=====
-    rate_buckets = {}          # ip -> {'count': int, 'window_start': ms}
-    failed_join_buckets = {}   # ip -> {'count': int, 'window_start': ms}
+    # ===== 内存限速桶（每 IP 指纹）=====
+    rate_buckets = {}          # ipFingerprint -> {'count': int, 'window_start': ms}
+    failed_join_buckets = {}   # ipFingerprint -> {'count': int, 'window_start': ms}
     rate_lock = threading.Lock()
 
     # ---------------- 限速逻辑 ----------------
@@ -98,36 +103,39 @@ class SignalingHandler(BaseHTTPRequestHandler):
         except Exception:
             return 'unknown'
 
+    def _client_fingerprint(self):
+        return hmac.new(IP_HASH_SECRET.encode('utf-8'), self._client_ip().encode('utf-8'), hashlib.sha256).hexdigest()
+
     @classmethod
-    def _check_rate_limit(cls, ip):
-        """每 IP 每分钟请求限速；返回 True 表示放行。"""
+    def _check_rate_limit(cls, identifier):
+        """每客户端指纹每分钟请求限速；返回 True 表示放行。"""
         now = int(time.time() * 1000)
         with cls.rate_lock:
-            bucket = cls.rate_buckets.get(ip)
+            bucket = cls.rate_buckets.get(identifier)
             if not bucket or now - bucket['window_start'] > RATE_WINDOW_MS:
-                cls.rate_buckets[ip] = {'count': 1, 'window_start': now}
+                cls.rate_buckets[identifier] = {'count': 1, 'window_start': now}
                 return True
             bucket['count'] += 1
             return bucket['count'] <= CONNECTIONS_PER_IP_PER_MIN
 
     @classmethod
-    def _is_join_throttled(cls, ip):
-        """检查该 IP 是否已被失败 join 限速（只读，不增计数）。"""
+    def _is_join_throttled(cls, identifier):
+        """检查该客户端指纹是否已被失败 join 限速（只读，不增计数）。"""
         now = int(time.time() * 1000)
         with cls.rate_lock:
-            bucket = cls.failed_join_buckets.get(ip)
+            bucket = cls.failed_join_buckets.get(identifier)
             if not bucket or now - bucket['window_start'] > RATE_WINDOW_MS:
                 return False
             return bucket['count'] >= MAX_FAILED_JOINS_PER_IP_PER_MIN
 
     @classmethod
-    def _record_failed_join(cls, ip):
+    def _record_failed_join(cls, identifier):
         """记录一次失败的 join 尝试（token/roomId 非法或不匹配、房间满）。"""
         now = int(time.time() * 1000)
         with cls.rate_lock:
-            bucket = cls.failed_join_buckets.get(ip)
+            bucket = cls.failed_join_buckets.get(identifier)
             if not bucket or now - bucket['window_start'] > RATE_WINDOW_MS:
-                cls.failed_join_buckets[ip] = {'count': 1, 'window_start': now}
+                cls.failed_join_buckets[identifier] = {'count': 1, 'window_start': now}
                 return
             bucket['count'] += 1
 
@@ -139,7 +147,7 @@ class SignalingHandler(BaseHTTPRequestHandler):
             token = body_obj.get('token')
         return token
 
-    def _authorize_room(self, room_id, token, ip):
+    def _authorize_room(self, room_id, token, client_fingerprint, persistent=False):
         """
         房间 token 准入控制：
           - 校验 roomId / token 合法性（长度）
@@ -148,15 +156,15 @@ class SignalingHandler(BaseHTTPRequestHandler):
           - 房间容量上限
         返回 (ok: bool, error_message: str|None)。失败时已记录 failed-join。
         约定：调用前应持有 room_lock。
-        说明：HTTP 轮询无持久连接，故以「客户端 IP」近似一个参与者来统计容量
+        说明：HTTP 轮询无持久连接，故以「客户端 IP 指纹」近似一个参与者来统计容量
         （房间 token 是全体共享的房间口令，所有合法成员持同一 token）。
         """
         if not isinstance(room_id, str) or not (MIN_ROOM_ID_LEN <= len(room_id) <= MAX_ROOM_ID_LEN):
-            self._record_failed_join(ip)
+            self._record_failed_join(client_fingerprint)
             return False, 'Invalid roomId'
 
         if not isinstance(token, str) or not (MIN_TOKEN_LEN <= len(token) <= MAX_TOKEN_LEN):
-            self._record_failed_join(ip)
+            self._record_failed_join(client_fingerprint)
             return False, 'Token required (16-128 chars)'
 
         token_h = hash_token(token)
@@ -164,41 +172,45 @@ class SignalingHandler(BaseHTTPRequestHandler):
 
         if room is None:
             # 首位加入者建立房间并锁定 token
-            self.rooms[room_id] = {'clients': set(), 'messages': [], 'token_hash': token_h}
+            self.rooms[room_id] = {'clients': set(), 'messages': [], 'token_hash': token_h, 'persistent': bool(persistent)}
             return True, None
 
         if not token_hash_matches(room.get('token_hash', ''), token_h):
-            self._record_failed_join(ip)
+            self._record_failed_join(client_fingerprint)
             return False, 'Invalid room token'
 
-        # 房间容量上限（以客户端 IP 作为参与者标识）
-        if ip not in room['clients'] and len(room['clients']) >= MAX_ROOM_CLIENTS:
-            self._record_failed_join(ip)
+        if persistent and not room.get('persistent'):
+            room['persistent'] = True
+
+        # 房间容量上限（以客户端 IP 指纹作为参与者标识）
+        if client_fingerprint not in room['clients'] and len(room['clients']) >= MAX_ROOM_CLIENTS:
+            self._record_failed_join(client_fingerprint)
             return False, 'Room full'
 
         return True, None
 
-    def _register_client(self, room_id, ip):
-        """把当前请求方登记为房间客户端（以客户端 IP 作为参与者标识，避免泄漏内部 id）。"""
+    def _register_client(self, room_id, client_fingerprint):
+        """把当前请求方登记为房间客户端（以客户端 IP 指纹作为参与者标识，避免泄漏内部 id）。"""
         room = self.rooms.get(room_id)
         if room is not None:
-            room['clients'].add(ip)
+            room['clients'].add(client_fingerprint)
 
     # ---------------- 通用前置校验 ----------------
     def _precheck(self):
         """
-        所有 API 请求前置安全校验：Origin 白名单 + 每 IP 限速。
+        所有 API 请求前置安全校验：Origin 白名单 + 每客户端指纹限速。
         通过返回 True；否则已发送错误响应并返回 False。
         """
         origin = self.headers.get('Origin')
         # 浏览器请求会带 Origin；非浏览器/无 Origin 的请求一律拒绝（除非白名单含 '*'）
         if not is_origin_allowed(origin):
-            logging.warning(f"🚫 拒绝请求（origin 不在白名单）: {origin} from {self._client_ip()}")
+            logging.warning(f"🚫 拒绝请求（origin 不在白名单）: {origin}")
             self.send_error_response(403, 'Origin not allowed')
             return False
 
-        if not self._check_rate_limit(self._client_ip()):
-            logging.warning(f"🚫 拒绝请求（限速）: {self._client_ip()}")
+        client_fingerprint = self._client_fingerprint()
+        if not self._check_rate_limit(client_fingerprint):
+            logging.warning(f"🚫 拒绝请求（限速）: {client_fingerprint[:12]}")
             self.send_error_response(429, 'Too many requests')
             return False
 
@@ -278,24 +290,24 @@ class SignalingHandler(BaseHTTPRequestHandler):
     def handle_signal_get(self, path):
         """处理信令GET请求 - 获取房间消息（需 token 准入）。"""
         room_id = path.split('/')[-1]
-        ip = self._client_ip()
+        client_fingerprint = self._client_fingerprint()
 
         # 失败 join 限速：阻止暴力枚举房间 token
-        if self._is_join_throttled(ip):
-            logging.warning(f"🚫 GET signal 被限速（失败次数过多）: {ip}")
+        if self._is_join_throttled(client_fingerprint):
+            logging.warning(f"🚫 GET signal 被限速（失败次数过多）: {client_fingerprint[:12]}")
             self.send_error_response(429, 'Too many failed join attempts, try again later')
             return
 
         token = self._extract_token(None)
 
         with self.room_lock:
-            ok, err = self._authorize_room(room_id, token, ip)
+            ok, err = self._authorize_room(room_id, token, client_fingerprint)
             if not ok:
                 # 统一错误，避免「房间是否存在 / token 是否正确」可区分
                 self.send_error_response(403, 'Forbidden')
                 logging.warning(f"GET /api/signal/{room_id} 被拒: {err}")
                 return
-            self._register_client(room_id, ip)
+            self._register_client(room_id, client_fingerprint)
             room = self.rooms[room_id]
             # 返回最近的消息（限制数量避免过大）
             recent_messages = room['messages'][-50:] if len(room['messages']) > 50 else room['messages']
@@ -320,11 +332,11 @@ class SignalingHandler(BaseHTTPRequestHandler):
     def handle_signal_post(self, path):
         """处理信令POST请求 - 发送消息到房间（需 token 准入）。"""
         room_id = path.split('/')[-1]
-        ip = self._client_ip()
+        client_fingerprint = self._client_fingerprint()
 
         # 失败 join 限速：阻止暴力枚举房间 token
-        if self._is_join_throttled(ip):
-            logging.warning(f"🚫 POST signal 被限速（失败次数过多）: {ip}")
+        if self._is_join_throttled(client_fingerprint):
+            logging.warning(f"🚫 POST signal 被限速（失败次数过多）: {client_fingerprint[:12]}")
             self.send_error_response(429, 'Too many failed join attempts, try again later')
             return
 
@@ -341,12 +353,12 @@ class SignalingHandler(BaseHTTPRequestHandler):
             token = self._extract_token(message_data if isinstance(message_data, dict) else None)
 
             with self.room_lock:
-                ok, err = self._authorize_room(room_id, token, ip)
+                ok, err = self._authorize_room(room_id, token, client_fingerprint, bool(message_data.get('persistent')) if isinstance(message_data, dict) else False)
                 if not ok:
                     self.send_error_response(403, 'Forbidden')
                     logging.warning(f"POST /api/signal/{room_id} 被拒: {err}")
                     return
-                self._register_client(room_id, ip)
+                self._register_client(room_id, client_fingerprint)
                 room = self.rooms[room_id]
 
                 # 不把 token 回写进消息历史，避免泄漏
@@ -465,8 +477,8 @@ class SignalingHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode())
 
     def log_message(self, format, *args):
-        """重写日志方法，使用更清晰的格式"""
-        logging.info(f"{self.address_string()} - {format % args}")
+        """重写日志方法，默认不输出客户端 IP。"""
+        logging.info(format % args)
 
 
 def cleanup_old_rooms():
@@ -479,6 +491,14 @@ def cleanup_old_rooms():
             with SignalingHandler.room_lock:
                 rooms_to_remove = []
                 for room_id, room_data in SignalingHandler.rooms.items():
+                    if room_data.get('persistent'):
+                        # 持久化房间保留准入信息，但不长期保留轮询信令消息。
+                        if room_data['messages']:
+                            last_message_time = room_data['messages'][-1]['timestamp']
+                            if current_time - last_message_time > 3600000:
+                                room_data['messages'] = []
+                        continue
+
                     # 如果房间超过1小时没有消息，则删除
                     if room_data['messages']:
                         last_message_time = room_data['messages'][-1]['timestamp']
@@ -495,10 +515,10 @@ def cleanup_old_rooms():
             # 顺带清理过期限速桶，避免内存无限增长
             with SignalingHandler.rate_lock:
                 for store in (SignalingHandler.rate_buckets, SignalingHandler.failed_join_buckets):
-                    stale = [ip for ip, b in store.items()
+                    stale = [identifier for identifier, b in store.items()
                              if current_time - b['window_start'] > RATE_WINDOW_MS]
-                    for ip in stale:
-                        del store[ip]
+                    for identifier in stale:
+                        del store[identifier]
 
         except Exception as e:
             logging.error(f"Error in cleanup task: {e}")

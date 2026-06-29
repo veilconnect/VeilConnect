@@ -30,12 +30,26 @@ function corsHeaders(origin, env) {
   return {
     'Access-Control-Allow-Origin': ok ? origin : 'null',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-VC-Declared-Bytes',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-VC-Declared-Bytes',
     'Vary': 'Origin'
   };
 }
 function json(obj, status, extra) {
   return new Response(JSON.stringify(obj), { status: status || 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...(extra || {}) } });
+}
+function bearerToken(request) {
+  const value = request.headers.get('Authorization') || '';
+  const match = value.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1] : '';
+}
+function timingSafeEqualString(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+function canReadMetrics(request, env) {
+  return Boolean(env.METRICS_READ_TOKEN) && timingSafeEqualString(bearerToken(request), env.METRICS_READ_TOKEN);
 }
 
 /** 经 Cloudflare Realtime TURN 现签凭据（需 secret TURN_KEY_ID / TURN_API_TOKEN）。 */
@@ -157,6 +171,9 @@ export default {
       return new Response(await r.text(), { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders(origin, env) } });
     }
     if (url.pathname === '/metrics' && request.method === 'GET') {
+      if (!canReadMetrics(request, env)) {
+        return json({ error: 'not found' }, 404, corsHeaders(origin, env));
+      }
       const stub = env.SIGNALING_ROOM.get(env.SIGNALING_ROOM.idFromName('__metrics__'));
       const r = await stub.fetch('https://do/__count');
       return new Response(await r.text(), { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders(origin, env) } });

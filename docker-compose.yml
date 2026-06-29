@@ -27,8 +27,19 @@ services:
       TURN_TTL: "3600"
       # 中继传输：both(默认)|tcp|udp。wg/隧道环境设 tcp 更稳（避免 UDP MTU/分片导致 DTLS 握手失败）。
       TURN_TRANSPORT: "${TURN_TRANSPORT:-both}"
-      # 信令详细日志默认关闭（隐私默认：不落客户端 IP/clientId/roomId）。排障可设 1。
+      # 信令详细日志默认关闭（隐私默认：不落 clientId/roomId/消息类型；明文 IP 不进入连接状态）。排障可设 1。
       SIGNAL_VERBOSE: "${SIGNAL_VERBOSE:-0}"
+      # 将客户端 IP 转成不可逆限流指纹；由 install.sh 自动生成，勿公开。
+      SIGNAL_IP_HASH_SECRET: "${SIGNAL_IP_HASH_SECRET}"
+      # 持久化房间 token 摘要密钥；未设置时服务端复用 SIGNAL_IP_HASH_SECRET。
+      ROOM_TOKEN_HASH_SECRET: "${ROOM_TOKEN_HASH_SECRET:-}"
+      # 持久化房间注册表：只保存 roomId/token 摘要/容量，不保存聊天内容。
+      PERSISTENT_ROOM_STORE: "${PERSISTENT_ROOM_STORE:-/data/persistent-rooms.json}"
+      BLOB_DIR: "/data/blobs"
+      # 读取 GET /metrics 的管理令牌；未设置时统计读取接口返回 404。
+      METRICS_READ_TOKEN: "${METRICS_READ_TOKEN:-}"
+    volumes:
+      - app_data:/data
     expose:
       - "3001"
 
@@ -79,5 +90,6 @@ services:
       - app
 
 volumes:
+  app_data:
   caddy_data:
   caddy_config:
