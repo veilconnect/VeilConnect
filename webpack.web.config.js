@@ -1,6 +1,31 @@
 const path = require('path');
+const fs = require('fs');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+
+/**
+ * 把 PWA 静态文件（Service Worker、manifest、图标）按固定文件名原样产出到输出根目录。
+ * SW 需稳定的根作用域 URL（/sw.js），故【不】加 contenthash；图标/manifest 同理走固定名。
+ * 仅用于网页（自部署 / Pages）构建——桌面端 file:// 不支持 SW，跳过。
+ */
+class EmitPwaAssetsPlugin {
+  apply(compiler) {
+    const { RawSource } = webpack.sources;
+    const dir = path.resolve(__dirname, 'src/web/pwa');
+    const files = ['sw.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon.svg'];
+    compiler.hooks.thisCompilation.tap('EmitPwaAssets', (compilation) => {
+      compilation.hooks.processAssets.tap(
+        { name: 'EmitPwaAssets', stage: webpack.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL },
+        () => {
+          for (const name of files) {
+            const abs = path.join(dir, name);
+            if (fs.existsSync(abs)) compilation.emitAsset(name, new RawSource(fs.readFileSync(abs)));
+          }
+        }
+      );
+    });
+  }
+}
 
 /**
  * 纯网页（自部署）构建：把 React UI + 加密 Web Worker 打成静态资源，输出到 server/public，
@@ -98,7 +123,9 @@ module.exports = (env, argv) => {
       new webpack.ProvidePlugin({
         Buffer: ['buffer', 'Buffer'],
         process: 'process/browser'
-      })
+      }),
+      // PWA 资产仅网页构建产出（桌面端 file:// 不支持 Service Worker）。
+      ...(!(env && env.outDir) ? [new EmitPwaAssetsPlugin()] : [])
     ],
     devServer: {
       port: 8080,

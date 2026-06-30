@@ -52,6 +52,14 @@ else
   skip "DO 持久化" "infra/cloudflare/signaling/node_modules 缺（cd infra/cloudflare/signaling && npm i）"
 fi
 
+# ②d PWA Service Worker 离线逻辑（确定性沙箱，无需浏览器）
+step "②d PWA SW 离线逻辑 (node --test)"
+if node --test src/web/pwa/sw.test.js >/tmp/vc-sw-test.log 2>&1; then
+  ok "PWA SW (离线外壳/跨源放行)"
+else
+  bad "PWA SW"; echo "  --- SW 测试日志尾部 ---"; tail -10 /tmp/vc-sw-test.log 2>/dev/null
+fi
+
 # ③ 生产构建
 step "③ 生产构建 (webpack)"
 if npm run -s build; then ok "build"; else bad "build"; fi

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="VeilConnect">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#667eea"/>
+      <stop offset="1" stop-color="#764ba2"/>
+    </linearGradient>
+  </defs>
+  <!-- 全幅渐变底（兼作 maskable 安全区：主图形居中留白）-->
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+  <!-- 盾形：隐私/保护 -->
+  <path d="M256 96 L392 146 V268 C392 350 332 404 256 432 C180 404 120 350 120 268 V146 Z"
+        fill="none" stroke="#ffffff" stroke-width="22" stroke-linejoin="round" opacity="0.95"/>
+  <!-- 锁孔：端到端加密 -->
+  <circle cx="256" cy="248" r="34" fill="#ffffff"/>
+  <rect x="242" y="270" width="28" height="58" rx="14" fill="#ffffff"/>
+</svg>

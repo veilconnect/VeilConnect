@@ -231,3 +231,17 @@ if (document.readyState === 'loading') {
 } else {
   mount();
 }
+
+// PWA Service Worker：仅网页(http/https)注册——让应用外壳被缓存，域名被封后仍能离线启动。
+// 桌面端(file://)与下载页跳过；注册失败静默(不影响主流程)。
+if (
+  typeof navigator !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  typeof location !== 'undefined' &&
+  location.protocol.startsWith('http') &&
+  !isDownloadLink
+) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* 忽略：SW 不可用不影响使用 */ });
+  });
+}
