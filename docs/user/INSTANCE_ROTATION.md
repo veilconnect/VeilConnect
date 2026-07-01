@@ -31,6 +31,30 @@ scripts/spin-instance.sh down root@<VPS_IP>
 scripts/spin-instance.sh status root@<VPS_IP>   # 查看状态
 ```
 
+### 连 VPS 都帮你开（调云 API 自动开/删机器）
+
+不想手动开机器时，用 `provision`：脚本调云厂商 API 开一台按小时计费的 VPS → 部署 → 打印拆除命令；
+用完 `destroy` 删机器停止计费。不给域名则自动用 `<公网IP>.sslip.io`（真证书，全自动无需手动 DNS）。
+
+```bash
+# Hetzner（最便宜稳，推荐）——先在控制台建一个 API token
+HCLOUD_TOKEN=xxxxxxxx scripts/spin-instance.sh provision hetzner
+# Vultr
+VULTR_API_KEY=xxxxxxxx scripts/spin-instance.sh provision vultr
+
+# 用完删机器（停止计费）——provision 结尾会打印带 id 的确切命令
+scripts/spin-instance.sh destroy hetzner <server_id>
+scripts/spin-instance.sh destroy vultr   <instance_id>
+```
+
+可用环境变量覆盖默认：
+- Hetzner：`HCLOUD_TYPE`(默认 cx22)、`HCLOUD_LOCATION`(默认 ash=Ashburn)、`HCLOUD_IMAGE`(默认 ubuntu-24.04)。
+- Vultr：`VULTR_REGION`(默认 ewr)、`VULTR_PLAN`(默认 vc2-1c-1gb)、`VULTR_OS_ID`(默认自动查 Ubuntu 24.04)。
+- `SPIN_YES=1` 跳过创建前确认；`SPIN_CURL_OPTS="--noproxy *"` 让 API 调用绕过坏代理。
+
+> ⚠ **按小时计费**：`provision` 会开真机器、开始花钱。用完**务必** `destroy`——脚本结尾已打印带 id 的命令。
+> 自定义域名要在开机后把 A 记录指向新 IP；全自动轮换建议直接用默认的 sslip.io。
+
 ## 轮换节奏（被封时）
 
 1. **备好一个域名池**：提前注册若干互不关联的域名（不同注册商/不同命名风格，别用 veil/chat/vpn 等显眼词）。
